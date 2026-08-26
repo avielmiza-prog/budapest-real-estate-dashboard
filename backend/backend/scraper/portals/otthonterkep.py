@@ -33,6 +33,7 @@ Scraper for otthonterkep.hu.
 ################################################################################
 """
 import logging
+import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
@@ -69,9 +70,55 @@ def _extract_from_json_ld(page) -> Optional[Dict[str, Any]]:
 
 class OtthonterkepScraper(BaseScraper):
     portal_name = "otthonterkep"
+    # Best-effort: same SELECTORS/JSON-LD-first guesses as the Playwright
+    # path below, just fetched via plain HTTP — see fetch_via_http(). This
+    # portal's markup is UNVERIFIED either way (module docstring), but
+    # scraper/pipeline.py's try_http_fetch() treats any exception here as
+    # "fall back to Playwright", so enabling this can never make a run
+    # worse than before — only skip Playwright when it happens to work.
+    supports_http_fetch = True
 
     def build_search_url(self, page_number: int) -> str:
         return SEARCH_URL_TEMPLATE.format(page=page_number)
+
+    def fetch_via_http(self, max_listings: int, max_pages: int, ignore_robots: bool = False) -> List[RawListing]:
+        from bs4 import BeautifulSoup
+
+        from scraper import http_client
+        from scraper import robots as robots_mod
+
+        raws: List[RawListing] = []
+        seen_urls = set()
+        for page_number in range(1, max_pages + 1):
+            search_url = self.build_search_url(page_number)
+            if not ignore_robots:
+                robots_mod.check_or_raise(search_url)
+
+            html = http_client.fetch_html(search_url)
+            soup = BeautifulSoup(html, "lxml")
+            page_urls = list(
+                dict.fromkeys(
+                    url_utils.clean_listing_url(a["href"], base_url=BASE_URL)
+                    for a in soup.select(SELECTORS["listing_card_link"])
+                    if a.get("href")
+                )
+            )
+            if not page_urls:
+                break
+
+            for listing_url in page_urls:
+                if listing_url in seen_urls:
+                    continue
+                seen_urls.add(listing_url)
+                if not ignore_robots and not robots_mod.is_allowed(listing_url):
+                    continue
+                time.sleep(1.0)  # polite delay between per-listing detail-page fetches
+                raw = _fetch_listing_via_http(listing_url)
+                if raw is not None:
+                    raws.append(raw)
+                    if len(raws) >= max_listings:
+                        return raws
+        return raws
 
     def extract_listing_urls(self, page) -> List[str]:
         anchors = page.query_selector_all(SELECTORS["listing_card_link"])
@@ -128,6 +175,67 @@ def _parse_from_dom(page, url: str) -> Optional[RawListing]:
     )
 
     full_text = page.inner_text("body")
+    if not listing.price_text and (tp.parse_price_huf(full_text) or tp.parse_price_eur(full_text)):
+        listing.price_text = full_text
+    if not listing.size_text and tp.parse_size_sqm(full_text):
+        listing.size_text = full_text
+    if not listing.rooms_text and tp.parse_rooms(full_text):
+        listing.rooms_text = full_text
+    if not listing.address_text and tp.extract_district_roman(full_text):
+        listing.address_text = full_text
+
+    return listing
+
+
+def _fetch_listing_via_http(url: str) -> Optional[RawListing]:
+    """HTTP+BeautifulSoup mirror of parse_listing_page()/_parse_from_dom() above — see fetch_via_http()."""
+    from bs4 import BeautifulSoup
+
+    from scraper import http_client
+
+    try:
+        html = http_client.fetch_html(url)
+    except http_client.FetchError as e:
+        logger.info("Could not fetch %s via HTTP: %s", url, e)
+        return None
+
+    json_ld_objects = json_extract.extract_json_ld_from_html(html)
+    json_ld = json_extract.find_by_type(json_ld_objects, "Product", "RealEstateListing", "Residence", "Offer")
+    if json_ld is not None:
+        listing = json_extract.raw_listing_from_json_ld(json_ld, url)
+        if listing is not None:
+            return listing
+
+    soup = BeautifulSoup(html, "lxml")
+
+    def text_of(selector: str) -> str:
+        el = soup.select_one(selector)
+        return el.get_text(strip=True) if el else ""
+
+    title = text_of(SELECTORS["title"])
+    if not title:
+        logger.warning("No title found at %s (JSON-LD and DOM both empty) — page may not be a listing", url)
+        return None
+
+    image_urls = []
+    for img in soup.select(SELECTORS["images"]):
+        src = img.get("src") or img.get("data-src")
+        if src:
+            image_urls.append(urljoin(BASE_URL, src))
+
+    listing = RawListing(
+        url=url,
+        title_text=title,
+        price_text=text_of(SELECTORS["price"]),
+        size_text=text_of(SELECTORS["size"]),
+        rooms_text=text_of(SELECTORS["rooms"]),
+        address_text=text_of(SELECTORS["address"]),
+        condition_text=text_of(SELECTORS["condition"]),
+        description_text=text_of(SELECTORS["description"]),
+        image_urls=image_urls,
+    )
+
+    full_text = soup.get_text(" ", strip=True)
     if not listing.price_text and (tp.parse_price_huf(full_text) or tp.parse_price_eur(full_text)):
         listing.price_text = full_text
     if not listing.size_text and tp.parse_size_sqm(full_text):

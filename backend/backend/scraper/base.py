@@ -56,6 +56,23 @@ class BaseScraper(ABC):
     # unnecessary — faster, and far fewer requests against the target site.
     supports_bulk_extraction: bool = False
 
+    # Set True (and implement fetch_via_http) when a portal's listing data
+    # is present in the plain server-rendered HTML — no browser/JS needed at
+    # all. scraper/agent/orchestrator.py tries this first and only falls
+    # back to launching Playwright if it's unset or raises.
+    supports_http_fetch: bool = False
+
+    def fetch_via_http(self, max_listings: int, max_pages: int, ignore_robots: bool = False) -> List[RawListing]:
+        """
+        Plain-HTTP equivalent of the Playwright-based collection path (see
+        scraper/http_client.py) — only implemented by portals with
+        supports_http_fetch = True. Should raise (scraper.http_client.FetchError
+        or anything else) rather than return an empty/partial result on
+        failure, so the caller knows to fall back to Playwright instead of
+        treating "couldn't fetch" as "genuinely zero listings".
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def build_search_url(self, page_number: int) -> str:
         """Return the search-results URL for the given 1-indexed page number."""

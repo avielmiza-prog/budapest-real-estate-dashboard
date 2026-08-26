@@ -46,17 +46,23 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Comma-separated list, e.g. "http://localhost:3000,https://my-dashboard.example.com".
-# Defaults cover this project's actual deployment (Vercel frontend + local
-# dev) out of the box; override via env var if you deploy the frontend
-# somewhere else instead of adding more origins here.
-_DEFAULT_FRONTEND_ORIGINS = "https://budapest-real-estate-dashboard.vercel.app,http://localhost:3000"
+# Comma-separated list, e.g. "http://localhost:3000,https://my-dashboard.example.com",
+# or "*" for any origin. Defaults to "*": this dashboard's actual data
+# access control is the optional ACCESS_PASSCODE gate (app/access_control.py),
+# not CORS — CORS only restricts browser JS, not curl/server-to-server
+# calls, so restricting it here wouldn't hide anything a passcode-less
+# deployment doesn't already expose, and "*" means a Vercel redeploy,
+# preview URL, or custom domain never needs an env var update to keep
+# working. Set FRONTEND_ORIGINS to a real comma-separated list yourself if
+# you want it locked down instead.
+_DEFAULT_FRONTEND_ORIGINS = "*"
 _frontend_origins = os.getenv("FRONTEND_ORIGINS", _DEFAULT_FRONTEND_ORIGINS).split(",")
 # Regex for origins that vary per-deploy — Vercel preview URLs get a unique
-# subdomain per branch/PR, so the exact-origin list above can't cover them.
-# Set FRONTEND_ORIGIN_REGEX="" explicitly to opt out of this default.
+# subdomain per branch/PR. Irrelevant while FRONTEND_ORIGINS="*" (above)
+# already matches everything; only takes effect if you narrow that down.
 _frontend_origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX", r"https://.*\.vercel\.app") or None
 _frontend_origins_set = {o.strip() for o in _frontend_origins if o.strip()}
+_allow_all_origins = "*" in _frontend_origins_set
 _frontend_origin_regex_compiled = re.compile(_frontend_origin_regex) if _frontend_origin_regex else None
 app.add_middleware(
     CORSMiddleware,
@@ -89,11 +95,17 @@ def _cors_headers_for_origin(origin: Optional[str]) -> dict:
     """
     if not origin:
         return {}
-    allowed = origin in _frontend_origins_set or (
-        _frontend_origin_regex_compiled is not None and _frontend_origin_regex_compiled.fullmatch(origin) is not None
+    allowed = (
+        _allow_all_origins
+        or origin in _frontend_origins_set
+        or (_frontend_origin_regex_compiled is not None and _frontend_origin_regex_compiled.fullmatch(origin) is not None)
     )
     if not allowed:
         return {}
+    # Always echo the specific origin, never literal "*" — a credentialed
+    # response (Allow-Credentials: true) with a literal "*" origin is
+    # rejected by browsers per the Fetch spec, same reason CORSMiddleware
+    # itself echoes the origin instead of "*" once allow_credentials=True.
     return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
 
 

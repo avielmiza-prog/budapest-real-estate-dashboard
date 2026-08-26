@@ -1,8 +1,17 @@
 """
-Orchestration: launch a stealth-configured Playwright browser, crawl a
-portal's search results + listing pages, normalize + store each listing in
-the database (upsert by url), then automatically run it through
-app.analyzer for a renovation ROI readout.
+Orchestration: crawl a portal's search results + listing pages, normalize +
+store each listing in the database (upsert by url), then automatically run
+it through app.analyzer for a renovation ROI readout.
+
+Two collection paths feed the same store_and_analyze() tail:
+  - try_http_fetch(): plain HTTP GETs (scraper/http_client.py), no browser
+    at all — for portals whose listing data is present in the raw
+    server-rendered HTML (see BaseScraper.supports_http_fetch). Tried first.
+  - collect_listing_urls()/collect_bulk_listings(): a stealth-configured
+    Playwright browser, for everything else. Only launched when the HTTP
+    path is unsupported or fails for a given portal — see run_scrape() below
+    and scraper/agent/orchestrator.py, which lazily launches at most one
+    shared browser across a whole multi-portal run.
 
 This is the piece that actually needs network access, so it can't be
 exercised end-to-end inside the sandbox this was written in (see the
@@ -166,6 +175,27 @@ def collect_bulk_listings(
     return raws
 
 
+def try_http_fetch(
+    scraper: BaseScraper, max_listings: int, max_pages: int, ignore_robots: bool
+) -> Optional[List[RawListing]]:
+    """
+    Attempts the lightweight, browser-free path (scraper/http_client.py)
+    for portals that support it — see BaseScraper.supports_http_fetch.
+    Returns None (never raises) on any failure or unsupported portal;
+    callers should fall back to the Playwright-based path in that case, not
+    treat None as "genuinely zero listings".
+    """
+    if not scraper.supports_http_fetch:
+        return None
+    try:
+        raws = scraper.fetch_via_http(max_listings=max_listings, max_pages=max_pages, ignore_robots=ignore_robots)
+        logger.info("[%s] HTTP fetch succeeded: %d listing(s), no browser needed", scraper.portal_name, len(raws))
+        return raws
+    except Exception as e:  # noqa: BLE001 - any failure here just means "fall back to Playwright"
+        logger.info("[%s] HTTP fetch failed (%s) — falling back to Playwright", scraper.portal_name, e)
+        return None
+
+
 def _fill_missing_coordinates(normalized: dict, db) -> None:
     """
     Mutates `normalized` in place: geocodes the address if the portal didn't
@@ -192,7 +222,7 @@ def _fill_missing_coordinates(normalized: dict, db) -> None:
         normalized["latitude"], normalized["longitude"] = benchmark.centroid_lat, benchmark.centroid_lng
 
 
-def _store_and_analyze(raw: RawListing, portal_name: str, url: str, eur_huf_rate: float) -> ScrapeResult:
+def store_and_analyze(raw: RawListing, portal_name: str, url: str, eur_huf_rate: float) -> ScrapeResult:
     """Shared tail of both scrape paths: normalize -> geocode -> upsert -> run app.analyzer."""
     normalized = normalize_listing(raw, portal_name)
     if normalized is None:
@@ -247,7 +277,7 @@ def scrape_one_listing(
     if raw is None:
         return ScrapeResult(url=url, stored=False, error="page did not look like a listing")
 
-    return _store_and_analyze(raw, scraper.portal_name, url, eur_huf_rate)
+    return store_and_analyze(raw, scraper.portal_name, url, eur_huf_rate)
 
 
 def run_scrape_with_browser(
@@ -278,7 +308,7 @@ def run_scrape_with_browser(
             len(raw_listings),
         )
         for raw in raw_listings:
-            result = _store_and_analyze(raw, scraper.portal_name, raw.url, eur_huf_rate)
+            result = store_and_analyze(raw, scraper.portal_name, raw.url, eur_huf_rate)
             results.append(result)
             logger.info("[%s] %s -> stored=%s error=%s", scraper.portal_name, raw.url, result.stored, result.error)
     else:
@@ -307,16 +337,23 @@ def run_scrape(
     human_like: bool = False,
 ) -> List[ScrapeResult]:
     """
-    Full pipeline for one portal: launch a browser, crawl search results ->
-    visit each listing -> normalize -> upsert into the DB -> run
-    app.analyzer -> return results.
+    Full pipeline for one portal: normalize -> upsert into the DB -> run
+    app.analyzer -> return results, from search results -> each listing.
 
-    Requires network access and a real Playwright browser.
+    Tries the lightweight, browser-free HTTP path first (see
+    scraper/http_client.py) for portals that support it — only launches a
+    real Playwright browser (which needs network access + the Chromium
+    binary installed) if that's unsupported or fails.
     """
+    init_db()
+
+    raws = try_http_fetch(scraper, max_listings, max_pages, ignore_robots)
+    if raws is not None:
+        return [store_and_analyze(raw, scraper.portal_name, raw.url, eur_huf_rate) for raw in raws]
+
     from playwright.sync_api import sync_playwright  # local import: only needed when actually running
 
     playwright_runtime.ensure_subprocess_capable_event_loop()
-    init_db()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)

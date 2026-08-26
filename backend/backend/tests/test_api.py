@@ -29,6 +29,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import access_control, scraper_jobs  # noqa: E402
+from app import main as app_main  # noqa: E402
 from app.database import init_db  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -94,12 +95,33 @@ def test_unhandled_exception_returns_clean_json_and_keeps_cors_headers():
         )
         assert response.status_code == 500
         assert "ValueError" in response.json()["detail"]
+        # Default CORS policy is allow-all (see app/main.py) — the origin is
+        # always echoed back (never a literal "*", since that's invalid
+        # alongside Allow-Credentials: true), whichever origin asked.
         assert response.headers.get("access-control-allow-origin") == "https://budapest-real-estate-dashboard.vercel.app"
 
-        untrusted = no_raise_client.get("/__test_unhandled_error", headers={"Origin": "https://evil.example.com"})
-        assert "access-control-allow-origin" not in {k.lower() for k in untrusted.headers}
+        arbitrary_origin = no_raise_client.get("/__test_unhandled_error", headers={"Origin": "https://some-other-site.example.com"})
+        assert arbitrary_origin.headers.get("access-control-allow-origin") == "https://some-other-site.example.com"
     finally:
         app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/__test_unhandled_error"]
+
+
+def test_cors_headers_for_origin_respects_a_locked_down_allowlist(monkeypatch):
+    """
+    The default policy is allow-all (see test above), but the underlying
+    _cors_headers_for_origin() must still correctly restrict when a
+    deployer opts into a specific FRONTEND_ORIGINS allowlist instead —
+    this exercises that path directly, since it's not exercised by default.
+    """
+    monkeypatch.setattr(app_main, "_allow_all_origins", False)
+    monkeypatch.setattr(app_main, "_frontend_origins_set", {"https://budapest-real-estate-dashboard.vercel.app"})
+    monkeypatch.setattr(app_main, "_frontend_origin_regex_compiled", None)
+
+    trusted = app_main._cors_headers_for_origin("https://budapest-real-estate-dashboard.vercel.app")
+    assert trusted.get("Access-Control-Allow-Origin") == "https://budapest-real-estate-dashboard.vercel.app"
+
+    untrusted = app_main._cors_headers_for_origin("https://evil.example.com")
+    assert untrusted == {}
 
 
 def test_auth_status_disabled_by_default():

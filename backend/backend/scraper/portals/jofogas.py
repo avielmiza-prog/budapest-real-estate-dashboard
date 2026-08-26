@@ -137,9 +137,24 @@ def ad_to_raw_listing(ad: Dict[str, Any]) -> Optional[RawListing]:
     )
 
 
+def _ads_to_raw_listings(ads: List[Dict[str, Any]]) -> List[RawListing]:
+    """Shared by both the Playwright and plain-HTTP paths — same adList.ads[] shape either way."""
+    raws = []
+    for ad in ads:
+        if not _is_residential(ad):
+            continue
+        raw = ad_to_raw_listing(ad)
+        if raw is not None:
+            raws.append(raw)
+        else:
+            logger.warning("Skipping malformed jofogas ad (missing url/subject): %r", ad.get("list_id"))
+    return raws
+
+
 class JofogasScraper(BaseScraper):
     portal_name = "jofogas"
     supports_bulk_extraction = True
+    supports_http_fetch = True
 
     def build_search_url(self, page_number: int) -> str:
         return SEARCH_URL_TEMPLATE.format(page=page_number)
@@ -161,15 +176,50 @@ class JofogasScraper(BaseScraper):
         if not data:
             return []
         ads = (data.get("props", {}).get("pageProps", {}).get("adList", {}) or {}).get("ads", [])
-        raws = []
-        for ad in ads:
-            if not _is_residential(ad):
-                continue
-            raw = ad_to_raw_listing(ad)
-            if raw is not None:
+        return _ads_to_raw_listings(ads)
+
+    def fetch_via_http(self, max_listings: int, max_pages: int, ignore_robots: bool = False) -> List[RawListing]:
+        """
+        jofogas.hu server-renders its full Next.js hydration JSON into the
+        search-results page's raw HTML (verified live against the real
+        site) — a plain HTTP GET gets the same adList.ads[] data
+        extract_listings_from_search_page() reads from a Playwright page,
+        with no browser involved at all.
+        """
+        from scraper import http_client, robots as robots_mod
+
+        raws: List[RawListing] = []
+        seen_urls = set()
+        for page_number in range(1, max_pages + 1):
+            search_url = self.build_search_url(page_number)
+            if not ignore_robots:
+                robots_mod.check_or_raise(search_url)
+
+            html = http_client.fetch_html(search_url)
+            data = json_extract.extract_next_data_from_html(html)
+            if data is None:
+                raise http_client.FetchError(
+                    f"__NEXT_DATA__ not found on {search_url} — jofogas.hu may no longer server-render it"
+                )
+
+            ad_list = data.get("props", {}).get("pageProps", {}).get("adList", {}) or {}
+            ads = ad_list.get("ads", [])
+            if not ads:
+                break
+
+            for raw in _ads_to_raw_listings(ads):
+                if raw.url in seen_urls:
+                    continue
+                seen_urls.add(raw.url)
                 raws.append(raw)
-            else:
-                logger.warning("Skipping malformed jofogas ad (missing url/subject): %r", ad.get("list_id"))
+                if len(raws) >= max_listings:
+                    return raws
+
+            pager = ad_list.get("pager", {}) or {}
+            current_page = pager.get("current_page", page_number)
+            last_page = pager.get("last_page", current_page)
+            if current_page >= min(last_page, MAX_ALLOWED_PAGE):
+                break
         return raws
 
     def extract_listing_urls(self, page) -> List[str]:

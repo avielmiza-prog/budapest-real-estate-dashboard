@@ -16,12 +16,58 @@ to markup changes.
 """
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from scraper.base import RawListing
 from scraper.url_utils import clean_listing_url
 
 logger = logging.getLogger(__name__)
+
+_NEXT_DATA_HTML_RE = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.DOTALL
+)
+_JSON_LD_HTML_RE = re.compile(
+    r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.DOTALL | re.IGNORECASE
+)
+
+
+def extract_next_data_from_html(html: str) -> Optional[Dict[str, Any]]:
+    """
+    Same as extract_next_data, but reads straight from a raw HTML string —
+    no Playwright page needed. Works whenever a site server-renders its
+    Next.js hydration data into the initial response (verified true for
+    jofogas.hu's search-results pages), which is the common case for
+    Next.js SSR/SSG pages regardless of what runs client-side afterward.
+    """
+    match = _NEXT_DATA_HTML_RE.search(html)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError as e:
+        logger.warning("__NEXT_DATA__ present but not valid JSON: %s", e)
+        return None
+
+
+def extract_json_ld_from_html(html: str) -> List[Dict[str, Any]]:
+    """HTML-string counterpart to extract_json_ld — see its docstring."""
+    results: List[Dict[str, Any]] = []
+    for raw in _JSON_LD_HTML_RE.findall(html):
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            results.extend(item for item in parsed if isinstance(item, dict))
+        elif isinstance(parsed, dict):
+            if isinstance(parsed.get("@graph"), list):
+                results.extend(item for item in parsed["@graph"] if isinstance(item, dict))
+            else:
+                results.append(parsed)
+    return results
 
 
 def extract_next_data(page) -> Optional[Dict[str, Any]]:

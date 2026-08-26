@@ -8,7 +8,19 @@ python-dotenv==1.0.1
 # (the local-dev default in app/database.py) needs no extra driver.
 psycopg2-binary==2.9.10
 
-# Scraper (Step 4)
+# Scraper: lightweight HTTP path (scraper/http_client.py) — tried first for
+# any portal whose listing data is present in the server-rendered HTML (see
+# BaseScraper.supports_http_fetch), so a run often needs no browser at all.
+httpx==0.28.1
+beautifulsoup4==4.14.2
+lxml==6.1.2
+curl_cffi==0.16.2   # real-browser TLS fingerprint retry when a plain httpx GET gets bot-blocked (403/429)
+
+# Scraper: Playwright fallback, for portals/pages the HTTP path can't handle.
+# NOT started at import/application-startup time anywhere in this codebase —
+# scraper/agent/orchestrator.py's _LazyBrowser only launches Chromium the
+# first time some portal actually needs it, and a failed launch is caught
+# and logged, never raised past that point (see run_agent()'s docstring).
 playwright==1.48.0
 playwright-stealth==1.0.6   # optional but recommended; scraper/stealth.py falls back to manual patches without it
 

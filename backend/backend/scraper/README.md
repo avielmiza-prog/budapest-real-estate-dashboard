@@ -1,9 +1,27 @@
 # Scraper (Step 4)
 
-Modular Playwright-based scraper that crawls a Budapest real-estate portal,
-extracts title / district / size / rooms / price (HUF+EUR) / description,
-stores each listing in the database (upsert by URL), and automatically runs
-every stored listing through `app/analyzer.py` for a renovation ROI readout.
+Modular scraper that crawls a Budapest real-estate portal, extracts title /
+district / size / rooms / price (HUF+EUR) / description, stores each listing
+in the database (upsert by URL), and automatically runs every stored
+listing through `app/analyzer.py` for a renovation ROI readout.
+
+Two collection paths, tried in order (see `scraper/pipeline.py` and
+`scraper/agent/orchestrator.py`):
+
+1. **Plain HTTP** (`scraper/http_client.py`) — no browser at all. Works for
+   any portal whose listing data is present in the server-rendered HTML;
+   verified true for jofogas.hu (its Next.js hydration JSON is already in
+   the raw response). httpx first, retried once via `curl_cffi` (real
+   Chrome TLS fingerprint) if that gets bot-blocked (403/429).
+2. **Playwright**, only as a fallback when a portal doesn't support the
+   HTTP path or it fails — launched lazily, at most once per multi-portal
+   agent run, and never crashes the run if the launch itself fails (missing
+   browser binary, etc.) — see `_LazyBrowser` in `scraper/agent/orchestrator.py`.
+
+In practice this means a full agent run against jofogas.hu alone needs no
+browser process at all, which is both much faster and removes Playwright's
+Chromium binary as a hard requirement for a deploy to *work*, even though
+it's still recommended for the other two portals' fallback path.
 
 ## Before you run this against a real site — read this
 
@@ -34,8 +52,15 @@ conscious choice, not a silent default.
 ```bash
 cd backend
 pip install -r requirements.txt
-playwright install chromium
+playwright install chromium   # optional locally — only needed for the Playwright fallback path
 ```
+
+The Chromium install step above is skippable if you only care about
+jofogas.hu (its HTTP path never touches Playwright) — but do it anyway
+unless you've confirmed you don't need the other two portals' fallback,
+since a missing browser just means those portals silently get skipped
+rather than erroring loudly. On Render, this is the build command instead —
+see `../../render.yaml` and `../README.md`'s Deploying section.
 
 ## Run
 
