@@ -4,16 +4,32 @@ import type { DashboardStats, Deal, DealFilters, DistrictBenchmark, FxRate, Pipe
 // NEXT_PUBLIC_API_URL is the primary name (matches most starter templates);
 // NEXT_PUBLIC_API_BASE_URL is kept as a fallback for anyone who already set
 // that one. Both are inlined at build time by Next.js — set them in your
-// deployment platform's env config before building, not after.
+// deployment platform's env config before building, not after. Either one,
+// if set, always wins over everything below.
 //
-// With neither set, this falls back to the deployed Render backend
-// unconditionally — including local `next dev`, which then talks to (and
-// can mutate data on) the live production backend unless you export
-// NEXT_PUBLIC_API_URL=http://localhost:8000 yourself for local work.
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  "https://budapest-real-estate-dashboard.onrender.com";
+// With neither set, this now branches on where the page is actually being
+// viewed from (window.location.hostname), not just NODE_ENV — a build-time
+// flag can't tell "vercel prod build" apart from "vercel prod build running
+// via `vercel dev` on localhost", but the browser's own hostname always
+// reflects reality. Local dev (localhost/127.0.0.1) falls back to
+// localhost:8000; anything else (the deployed Vercel domain, a preview
+// URL, SSR/build-time evaluation with no window) falls back to the
+// deployed Render backend, so a local `next dev` never accidentally reads
+// from — or mutates — the live production database.
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const PRODUCTION_API_FALLBACK = "https://budapest-real-estate-dashboard.onrender.com";
+const LOCAL_API_FALLBACK = "http://localhost:8000";
+
+function resolveApiBaseUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (explicit) return explicit;
+  if (typeof window !== "undefined" && LOCAL_HOSTNAMES.has(window.location.hostname)) {
+    return LOCAL_API_FALLBACK;
+  }
+  return PRODUCTION_API_FALLBACK;
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 export class ApiError extends Error {
   status: number;

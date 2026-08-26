@@ -18,8 +18,8 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from app import access_control, analyzer, crud, dashboard, deal_score, fx_rate, investment_memo, models, schemas, scraper_jobs, spec_sheet
-from app.database import get_db, init_db
+from app import access_control, analyzer, crud, dashboard, deal_score, fx_rate, investment_memo, models, schemas, scraper_jobs, seed, spec_sheet
+from app.database import SessionLocal, get_db, init_db
 
 def _parse_districts(district: Optional[str]) -> Optional[List[str]]:
     """
@@ -81,6 +81,15 @@ app.add_middleware(access_control.PasscodeGateMiddleware)
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    # District benchmarks only — never listings. See app/seed.py's docstring
+    # for why: this is what makes deal_score/analysis come back non-null on
+    # a freshly-provisioned database (e.g. a new Render deploy) instead of
+    # every deal showing null ROI until someone manually adds all 23.
+    db = SessionLocal()
+    try:
+        seed.seed_district_benchmarks_if_empty(db)
+    finally:
+        db.close()
 
 
 def _cors_headers_for_origin(origin: Optional[str]) -> dict:

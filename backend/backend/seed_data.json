@@ -1,0 +1,188 @@
+{
+  "district_benchmarks": [
+    {
+      "district_number": 1,
+      "avg_price_sqm_raw": 950000.0,
+      "avg_price_sqm_renovated": 1500000.0,
+      "avg_rent_huf_sqm": 6700.0,
+      "centroid_lat": 47.4959,
+      "centroid_lng": 19.0398
+    },
+    {
+      "district_number": 2,
+      "avg_price_sqm_raw": 900000.0,
+      "avg_price_sqm_renovated": 1450000.0,
+      "avg_rent_huf_sqm": 6500.0,
+      "centroid_lat": 47.5262,
+      "centroid_lng": 19.0201
+    },
+    {
+      "district_number": 3,
+      "avg_price_sqm_raw": 650000.0,
+      "avg_price_sqm_renovated": 1000000.0,
+      "avg_rent_huf_sqm": 4500.0,
+      "centroid_lat": 47.5636,
+      "centroid_lng": 19.0396
+    },
+    {
+      "district_number": 4,
+      "avg_price_sqm_raw": 500000.0,
+      "avg_price_sqm_renovated": 800000.0,
+      "avg_rent_huf_sqm": 3600.0,
+      "centroid_lat": 47.5647,
+      "centroid_lng": 19.0888
+    },
+    {
+      "district_number": 5,
+      "avg_price_sqm_raw": 1100000.0,
+      "avg_price_sqm_renovated": 1750000.0,
+      "avg_rent_huf_sqm": 7900.0,
+      "centroid_lat": 47.4979,
+      "centroid_lng": 19.0537
+    },
+    {
+      "district_number": 6,
+      "avg_price_sqm_raw": 950000.0,
+      "avg_price_sqm_renovated": 1550000.0,
+      "avg_rent_huf_sqm": 7000.0,
+      "centroid_lat": 47.5065,
+      "centroid_lng": 19.0655
+    },
+    {
+      "district_number": 7,
+      "avg_price_sqm_raw": 900000.0,
+      "avg_price_sqm_renovated": 1500000.0,
+      "avg_rent_huf_sqm": 6700.0,
+      "centroid_lat": 47.4979,
+      "centroid_lng": 19.0707
+    },
+    {
+      "district_number": 8,
+      "avg_price_sqm_raw": 650000.0,
+      "avg_price_sqm_renovated": 1050000.0,
+      "avg_rent_huf_sqm": 4700.0,
+      "centroid_lat": 47.4886,
+      "centroid_lng": 19.0713
+    },
+    {
+      "district_number": 9,
+      "avg_price_sqm_raw": 750000.0,
+      "avg_price_sqm_renovated": 1200000.0,
+      "avg_rent_huf_sqm": 5400.0,
+      "centroid_lat": 47.4783,
+      "centroid_lng": 19.0715
+    },
+    {
+      "district_number": 10,
+      "avg_price_sqm_raw": 480000.0,
+      "avg_price_sqm_renovated": 780000.0,
+      "avg_rent_huf_sqm": 3500.0,
+      "centroid_lat": 47.4794,
+      "centroid_lng": 19.1394
+    },
+    {
+      "district_number": 11,
+      "avg_price_sqm_raw": 800000.0,
+      "avg_price_sqm_renovated": 1300000.0,
+      "avg_rent_huf_sqm": 5800.0,
+      "centroid_lat": 47.4675,
+      "centroid_lng": 19.0432
+    },
+    {
+      "district_number": 12,
+      "avg_price_sqm_raw": 950000.0,
+      "avg_price_sqm_renovated": 1550000.0,
+      "avg_rent_huf_sqm": 7000.0,
+      "centroid_lat": 47.5024,
+      "centroid_lng": 18.9909
+    },
+    {
+      "district_number": 13,
+      "avg_price_sqm_raw": 800000.0,
+      "avg_price_sqm_renovated": 1300000.0,
+      "avg_rent_huf_sqm": 5800.0,
+      "centroid_lat": 47.5372,
+      "centroid_lng": 19.0787
+    },
+    {
+      "district_number": 14,
+      "avg_price_sqm_raw": 650000.0,
+      "avg_price_sqm_renovated": 1050000.0,
+      "avg_rent_huf_sqm": 4700.0,
+      "centroid_lat": 47.5171,
+      "centroid_lng": 19.1032
+    },
+    {
+      "district_number": 15,
+      "avg_price_sqm_raw": 500000.0,
+      "avg_price_sqm_renovated": 800000.0,
+      "avg_rent_huf_sqm": 3600.0,
+      "centroid_lat": 47.5657,
+      "centroid_lng": 19.1281
+    },
+    {
+      "district_number": 16,
+      "avg_price_sqm_raw": 520000.0,
+      "avg_price_sqm_renovated": 830000.0,
+      "avg_rent_huf_sqm": 3700.0,
+      "centroid_lat": 47.514,
+      "centroid_lng": 19.1935
+    },
+    {
+      "district_number": 17,
+      "avg_price_sqm_raw": 480000.0,
+      "avg_price_sqm_renovated": 770000.0,
+      "avg_rent_huf_sqm": 3500.0,
+      "centroid_lat": 47.4881,
+      "centroid_lng": 19.2601
+    },
+    {
+      "district_number": 18,
+      "avg_price_sqm_raw": 500000.0,
+      "avg_price_sqm_renovated": 800000.0,
+      "avg_rent_huf_sqm": 3600.0,
+      "centroid_lat": 47.439,
+      "centroid_lng": 19.1826
+    },
+    {
+      "district_number": 19,
+      "avg_price_sqm_raw": 480000.0,
+      "avg_price_sqm_renovated": 770000.0,
+      "avg_rent_huf_sqm": 3500.0,
+      "centroid_lat": 47.4515,
+      "centroid_lng": 19.1416
+    },
+    {
+      "district_number": 20,
+      "avg_price_sqm_raw": 460000.0,
+      "avg_price_sqm_renovated": 740000.0,
+      "avg_rent_huf_sqm": 3300.0,
+      "centroid_lat": 47.4362,
+      "centroid_lng": 19.1013
+    },
+    {
+      "district_number": 21,
+      "avg_price_sqm_raw": 430000.0,
+      "avg_price_sqm_renovated": 690000.0,
+      "avg_rent_huf_sqm": 3100.0,
+      "centroid_lat": 47.4177,
+      "centroid_lng": 19.0765
+    },
+    {
+      "district_number": 22,
+      "avg_price_sqm_raw": 550000.0,
+      "avg_price_sqm_renovated": 880000.0,
+      "avg_rent_huf_sqm": 4000.0,
+      "centroid_lat": 47.4147,
+      "centroid_lng": 18.9532
+    },
+    {
+      "district_number": 23,
+      "avg_price_sqm_raw": 420000.0,
+      "avg_price_sqm_renovated": 670000.0,
+      "avg_rent_huf_sqm": 3000.0,
+      "centroid_lat": 47.3888,
+      "centroid_lng": 19.1361
+    }
+  ]
+}
