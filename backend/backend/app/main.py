@@ -41,16 +41,21 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# Comma-separated list, e.g. "http://localhost:3000,https://my-dashboard.example.com"
-_frontend_origins = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000").split(",")
-# Optional: a regex for origins that vary per-deploy, e.g. Vercel preview URLs
-# (FRONTEND_ORIGIN_REGEX=r"https://.*\.vercel\.app"). Unset by default —
-# only the exact origins above are allowed unless a deployer opts in.
-_frontend_origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX") or None
+# Comma-separated list, e.g. "http://localhost:3000,https://my-dashboard.example.com".
+# Defaults cover this project's actual deployment (Vercel frontend + local
+# dev) out of the box; override via env var if you deploy the frontend
+# somewhere else instead of adding more origins here.
+_DEFAULT_FRONTEND_ORIGINS = "https://budapest-real-estate-dashboard.vercel.app,http://localhost:3000"
+_frontend_origins = os.getenv("FRONTEND_ORIGINS", _DEFAULT_FRONTEND_ORIGINS).split(",")
+# Regex for origins that vary per-deploy — Vercel preview URLs get a unique
+# subdomain per branch/PR, so the exact-origin list above can't cover them.
+# Set FRONTEND_ORIGIN_REGEX="" explicitly to opt out of this default.
+_frontend_origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX", r"https://.*\.vercel\.app") or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _frontend_origins if o.strip()],
     allow_origin_regex=_frontend_origin_regex,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -7,9 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { clearStoredPasscode, getStoredPasscode, setStoredPasscode } from "@/lib/access";
-import { ApiError } from "@/lib/api";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { API_BASE_URL, ApiError } from "@/lib/api";
 
 type GateState = "checking" | "open" | "locked";
 
