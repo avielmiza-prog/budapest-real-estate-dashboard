@@ -25,6 +25,16 @@ By default the API only accepts cross-origin requests from `http://localhost:300
 (where `../frontend` runs in dev) — set `FRONTEND_ORIGINS` (comma-separated) to
 change that, e.g. for a deployed frontend's real origin.
 
+## Deploying (Render)
+
+See `../../render.yaml` for the Blueprint. The one step that's easy to miss
+if you set the service up manually instead: the build command must run
+`playwright install --with-deps chromium` *after* `pip install`, not just
+`pip install -r requirements.txt` alone — pip only installs the `playwright`
+Python package, not the actual browser binary it drives. Without this step,
+every scan (`POST /api/scraper/trigger`) fails instantly with
+`BrowserType.launch: Executable doesn't exist at .../ms-playwright/...`.
+
 ## Frontend
 
 `../frontend` is a Next.js + Tailwind + shadcn/ui investment dashboard that

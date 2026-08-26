@@ -1,0 +1,22 @@
+# Render Blueprint for the FastAPI backend. NOTE: this file only takes
+# effect for a service actually created *from* this Blueprint (Render
+# dashboard -> New -> Blueprint). If your existing web service was created
+# manually, Render does NOT auto-sync its settings from this file — you
+# must copy the buildCommand below into that service's Settings -> Build
+# Command yourself (then trigger a manual deploy) for the fix to take effect.
+#
+# Why this matters: `pip install -r requirements.txt` installs the
+# `playwright` Python package, but NOT the actual browser binary it drives
+# — that's a separate download step. Without it, every scraper run fails
+# instantly with "BrowserType.launch: Executable doesn't exist at
+# .../ms-playwright/chromium-1140/...".
+services:
+  - type: web
+    name: budapest-real-estate-dashboard
+    runtime: python
+    rootDir: backend/backend
+    buildCommand: "pip install -r requirements.txt && playwright install --with-deps chromium"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9

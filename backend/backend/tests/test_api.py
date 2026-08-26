@@ -68,6 +68,40 @@ def test_root_health_check():
     assert response.json()["status"] == "ok"
 
 
+def test_unhandled_exception_returns_clean_json_and_keeps_cors_headers():
+    """
+    Regression test: Starlette's ServerErrorMiddleware (which runs the
+    bare-Exception handler in app/main.py) sits *outside* CORSMiddleware, so
+    without main.py's _cors_headers_for_origin fix, this response would
+    reach a cross-origin browser (Vercel -> Render) with no CORS headers at
+    all and get silently blocked — surfacing as an opaque network failure
+    instead of the actual error. raise_server_exceptions=False is required
+    here: TestClient's default re-raises server exceptions into the test
+    process for debugging convenience, which isn't what a real network
+    client ever sees (it always gets the HTTP response on the wire).
+    """
+    from fastapi.testclient import TestClient
+
+    @app.get("/__test_unhandled_error")
+    def _boom():
+        raise ValueError("deliberate test explosion")
+
+    try:
+        no_raise_client = TestClient(app, raise_server_exceptions=False)
+        response = no_raise_client.get(
+            "/__test_unhandled_error",
+            headers={"Origin": "https://budapest-real-estate-dashboard.vercel.app"},
+        )
+        assert response.status_code == 500
+        assert "ValueError" in response.json()["detail"]
+        assert response.headers.get("access-control-allow-origin") == "https://budapest-real-estate-dashboard.vercel.app"
+
+        untrusted = no_raise_client.get("/__test_unhandled_error", headers={"Origin": "https://evil.example.com"})
+        assert "access-control-allow-origin" not in {k.lower() for k in untrusted.headers}
+    finally:
+        app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) != "/__test_unhandled_error"]
+
+
 def test_auth_status_disabled_by_default():
     assert client.get("/api/auth/status").json() == {"passcode_required": False}
 

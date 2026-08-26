@@ -6,12 +6,17 @@ Run locally with:
 
 Interactive API docs will then be at http://127.0.0.1:8000/docs
 """
+import logging
 import os
+import re
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app import access_control, analyzer, crud, dashboard, deal_score, fx_rate, investment_memo, models, schemas, scraper_jobs, spec_sheet
 from app.database import get_db, init_db
@@ -51,6 +56,8 @@ _frontend_origins = os.getenv("FRONTEND_ORIGINS", _DEFAULT_FRONTEND_ORIGINS).spl
 # subdomain per branch/PR, so the exact-origin list above can't cover them.
 # Set FRONTEND_ORIGIN_REGEX="" explicitly to opt out of this default.
 _frontend_origin_regex = os.getenv("FRONTEND_ORIGIN_REGEX", r"https://.*\.vercel\.app") or None
+_frontend_origins_set = {o.strip() for o in _frontend_origins if o.strip()}
+_frontend_origin_regex_compiled = re.compile(_frontend_origin_regex) if _frontend_origin_regex else None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o.strip() for o in _frontend_origins if o.strip()],
@@ -68,6 +75,40 @@ app.add_middleware(access_control.PasscodeGateMiddleware)
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+
+
+def _cors_headers_for_origin(origin: Optional[str]) -> dict:
+    """
+    Mirrors CORSMiddleware's own origin check, for the one response that
+    bypasses it: a bare-`Exception` handler (like the one below) is run by
+    Starlette's ServerErrorMiddleware, which wraps *outside* CORSMiddleware
+    in the stack — so without this, an unhandled exception's response would
+    reach the browser with no CORS headers at all and get silently blocked
+    cross-origin (Vercel -> Render), surfacing as an opaque network failure
+    instead of the actual error this handler is trying to report.
+    """
+    if not origin:
+        return {}
+    allowed = origin in _frontend_origins_set or (
+        _frontend_origin_regex_compiled is not None and _frontend_origin_regex_compiled.fullmatch(origin) is not None
+    )
+    if not allowed:
+        return {}
+    return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", "Vary": "Origin"}
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    Last-resort catch-all for anything that isn't already an HTTPException
+    (FastAPI keeps its own more-specific handler for those, e.g. 404s stay
+    404s — this only fires for genuinely unhandled bugs). Render's dashboard
+    only shows stdout/stderr, not a debugger, so logging the full traceback
+    here is the only way to actually see what broke in production.
+    """
+    logger.exception("Unhandled error on %s %s", request.method, request.url)
+    headers = _cors_headers_for_origin(request.headers.get("origin"))
+    return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {exc}"}, headers=headers)
 
 
 @app.get("/", tags=["meta"])
