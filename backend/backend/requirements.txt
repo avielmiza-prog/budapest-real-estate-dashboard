@@ -1,0 +1,20 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+pydantic==2.10.3
+python-dotenv==1.0.1
+
+# Postgres driver for production (DATABASE_URL=postgresql://...) — SQLite
+# (the local-dev default in app/database.py) needs no extra driver.
+psycopg2-binary==2.9.10
+
+# Scraper (Step 4)
+playwright==1.48.0
+playwright-stealth==1.0.6   # optional but recommended; scraper/stealth.py falls back to manual patches without it
+
+# Contractor Spec Sheet PDF export
+reportlab==4.2.5
+Pillow==11.0.0
+
+# Testing (tests/test_spec_sheet.py inspects generated PDFs with pypdf)
+pypdf==5.1.0
