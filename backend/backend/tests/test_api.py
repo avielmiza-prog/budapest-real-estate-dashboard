@@ -278,6 +278,47 @@ def test_create_property_requires_title_and_district():
     assert response.status_code == 422
 
 
+def test_deals_sorting_and_unlimited_listings():
+    cheap = client.post(
+        "/properties",
+        json={
+            **_PROPERTY_PAYLOAD,
+            "title": "Cheap sort-test flat",
+            "url": "https://example.test/listing/sort-cheap",
+            "price_huf": 20_000_000,
+            "size_sqm": 40.0,
+        },
+    ).json()
+    expensive = client.post(
+        "/properties",
+        json={
+            **_PROPERTY_PAYLOAD,
+            "title": "Expensive sort-test flat",
+            "url": "https://example.test/listing/sort-expensive",
+            "price_huf": 90_000_000,
+            "size_sqm": 40.0,
+        },
+    ).json()
+
+    price_desc_ids = [d["id"] for d in client.get("/deals", params={"sort": "price_desc"}).json()]
+    assert price_desc_ids.index(expensive["id"]) < price_desc_ids.index(cheap["id"])
+
+    price_asc_ids = [d["id"] for d in client.get("/deals", params={"sort": "price_asc"}).json()]
+    assert price_asc_ids.index(cheap["id"]) < price_asc_ids.index(expensive["id"])
+
+    # No `limit` -> every matching listing comes back, not a truncated default page.
+    unlimited = client.get("/deals").json()
+    assert len(unlimited) >= 2
+    assert cheap["id"] in [d["id"] for d in unlimited]
+    assert expensive["id"] in [d["id"] for d in unlimited]
+
+    limited = client.get("/deals", params={"limit": 1}).json()
+    assert len(limited) == 1
+
+    client.delete(f"/properties/{cheap['id']}")
+    client.delete(f"/properties/{expensive['id']}")
+
+
 # ---------------------------------------------------------------------------
 # fx-rate (hits a real external API; falls back gracefully on failure — see
 # app/fx_rate.py — so this only asserts the response shape, not the value)

@@ -291,8 +291,8 @@ def scrape_one_listing(
 def run_scrape_with_browser(
     browser,
     scraper: BaseScraper,
-    max_listings: int = 20,
-    max_pages: int = 5,
+    max_listings: int = 150,
+    max_pages: int = 9,
     delay_range: tuple = (1.5, 3.5),
     eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE,
     ignore_robots: bool = False,
@@ -336,8 +336,8 @@ def run_scrape_with_browser(
 
 def run_scrape(
     scraper: BaseScraper,
-    max_listings: int = 20,
-    max_pages: int = 5,
+    max_listings: int = 150,
+    max_pages: int = 9,
     delay_range: tuple = (1.5, 3.5),
     headless: bool = True,
     eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE,

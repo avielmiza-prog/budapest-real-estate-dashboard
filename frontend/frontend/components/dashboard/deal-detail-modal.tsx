@@ -568,8 +568,6 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
   const isMock = deal ? isMockListingUrl(deal.source_url ?? deal.url) : false;
   const [customCostInput, setCustomCostInput] = useState<string>("");
   const customCostEurSqm = customCostInput.trim() === "" ? null : Number(customCostInput);
-  const validCustomCost =
-    customCostEurSqm !== null && !Number.isNaN(customCostEurSqm) && customCostEurSqm >= 0 ? customCostEurSqm : null;
 
   // Reset the custom-cost input when a different deal is opened in the same modal instance.
   useEffect(() => {
@@ -619,14 +617,9 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
                 </a>
               </Button>
               <Button variant="outline" className="w-fit" asChild>
-                <a
-                  href={getInvestmentMemoUrl(deal.id, eurHufRate, validCustomCost)}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={validCustomCost ? `Uses your custom ${validCustomCost} €/sqm renovation cost` : undefined}
-                >
+                <a href={getInvestmentMemoUrl(deal.id, eurHufRate)} target="_blank" rel="noreferrer">
                   <Sparkles />
-                  Export Investment Memo (PDF)
+                  Export Deal Memo (PDF)
                 </a>
               </Button>
               <PipelineStatusSelect deal={deal} onUpdated={onDealUpdated} className="ml-auto w-40" />

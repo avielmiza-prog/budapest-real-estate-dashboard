@@ -1,13 +1,13 @@
 "use client";
 
 import Image from "next/image";
-import { ChevronLeft, ChevronRight, ExternalLink, FileText, ImageOff } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, FileText, ImageOff, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { getSpecSheetUrl } from "@/lib/api";
+import { getInvestmentMemoUrl, getSpecSheetUrl } from "@/lib/api";
 import { getSourceListingUrl, isMockListingUrl } from "@/lib/deal-links";
 import { formatCurrency, formatRooms, formatSqm } from "@/lib/format";
 import type { Currency, Deal } from "@/lib/types";
@@ -131,6 +131,11 @@ export function ListingsCards({ deals, onSelectDeal, onDealUpdated, currency, eu
                 <Button variant="ghost" size="icon" title="Download Contractor Spec Sheet" asChild>
                   <a href={getSpecSheetUrl(deal.id, eurHufRate)} target="_blank" rel="noreferrer">
                     <FileText />
+                  </a>
+                </Button>
+                <Button variant="ghost" size="icon" title="Download Deal Memo (PDF)" asChild>
+                  <a href={getInvestmentMemoUrl(deal.id, eurHufRate)} target="_blank" rel="noreferrer">
+                    <Sparkles />
                   </a>
                 </Button>
               </div>

@@ -124,6 +124,21 @@ export interface DashboardStats {
   computed_at: string;
 }
 
+// Mirrors app/dashboard.py's SORT_OPTIONS — kept in this exact order since
+// the sort dropdown renders options in this order.
+export type SortOption = "newest" | "price_desc" | "price_asc" | "score_desc" | "roi_desc" | "sqm_asc";
+
+export const SORT_OPTIONS: SortOption[] = ["newest", "price_desc", "price_asc", "score_desc", "roi_desc", "sqm_asc"];
+
+export const SORT_OPTION_LABELS: Record<SortOption, string> = {
+  newest: "Newest Added",
+  price_desc: "Price: High to Low",
+  price_asc: "Price: Low to High",
+  score_desc: "Highest Deal Score",
+  roi_desc: "Best ROI / Yield",
+  sqm_asc: "Price/sqm: Low to High",
+};
+
 export interface DealFilters {
   districts: string[]; // roman numerals, e.g. ["VII", "VIII"] — empty means "all districts"
   minRoi: number | null; // percent
@@ -134,6 +149,7 @@ export interface DealFilters {
   portals: string[]; // e.g. ["jofogas", "ingatlanbazar"] — empty means "all portals"
   favoritesOnly: boolean;
   pipelineStatus: PipelineStatus | null; // null means "all statuses"
+  sortBy: SortOption;
 }
 
 export const EMPTY_FILTERS: DealFilters = {
@@ -146,6 +162,7 @@ export const EMPTY_FILTERS: DealFilters = {
   portals: [],
   favoritesOnly: false,
   pipelineStatus: null,
+  sortBy: "newest",
 };
 
 export type ViewMode = "table" | "card" | "split";

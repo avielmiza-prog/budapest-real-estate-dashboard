@@ -113,7 +113,7 @@ class _LazyBrowser:
 
 
 def run_agent(
-    max_listings: int = 30,
+    max_listings: int = 150,
     max_pages: int = 5,
     delay_range: tuple = (1.5, 3.5),
     headless: bool = True,

@@ -110,6 +110,33 @@ def compute_stats(db: Session, eur_huf_rate: float, top_n: int = 5) -> dict:
     }
 
 
+# Sort keys, most-recently-used first. Each maps a deal dict to a sort key;
+# entries with a None underlying value always sort last, regardless of
+# direction, so "missing data" never masquerades as "worst" or "best".
+SORT_OPTIONS = ("newest", "price_desc", "price_asc", "score_desc", "roi_desc", "sqm_asc")
+
+
+def _sort_deals(deals: List[dict], sort_by: str) -> List[dict]:
+    if sort_by == "price_desc":
+        return sorted(deals, key=lambda d: (d["price_huf"] is None, -(d["price_huf"] or 0)))
+    if sort_by == "price_asc":
+        return sorted(deals, key=lambda d: (d["price_huf"] is None, d["price_huf"] or 0))
+    if sort_by == "score_desc":
+        return sorted(deals, key=lambda d: (d["deal_score"] is None, -(d["deal_score"] or 0)))
+    if sort_by == "roi_desc":
+        return sorted(
+            deals,
+            key=lambda d: (
+                d["best_tier"] is None or d["best_tier"]["roi_percent"] is None,
+                -((d["best_tier"] or {}).get("roi_percent") or 0),
+            ),
+        )
+    if sort_by == "sqm_asc":
+        return sorted(deals, key=lambda d: (d["price_per_sqm"] is None, d["price_per_sqm"] or 0))
+    # "newest" (default / unrecognized) — created_at desc, matching the DB's own ordering.
+    return sorted(deals, key=lambda d: d["created_at"] or "", reverse=True)
+
+
 def list_deals(
     db: Session,
     district: Optional[str] = None,
@@ -123,21 +150,29 @@ def list_deals(
     favorites_only: bool = False,
     pipeline_status: Optional[str] = None,
     eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE,
+    sort_by: str = "newest",
     skip: int = 0,
-    limit: int = 200,
+    limit: Optional[int] = None,
 ) -> List[dict]:
     """
     Property rows (DB-level filtered by district/size/price/portal/favorite/
     pipeline status) enriched with their full renovation analysis and a
     0-100 Deal Score, then optionally filtered by min_roi (best tier's ROI%
-    >= min_roi). A property with no district benchmark yet gets
+    >= min_roi), sorted by `sort_by` (see SORT_OPTIONS), and finally paged
+    with skip/limit. A property with no district benchmark yet gets
     analysis=None and is excluded whenever min_roi is set, since there's
     nothing to compare it against.
+
+    Sorting and paging both happen in Python, after the full matching set is
+    enriched — several sort keys (deal_score, ROI) only exist post-analysis,
+    so they can't be pushed down to the DB query. `limit=None` (the default)
+    returns every relevant listing, unslicing what used to be a hard 200-row
+    cap.
     """
     properties = crud.list_properties(
         db,
-        skip=skip,
-        limit=limit,
+        skip=0,
+        limit=None,
         district=district,
         districts=districts,
         min_price_huf=min_price_huf,
@@ -222,4 +257,9 @@ def list_deals(
             }
         )
 
+    deals = _sort_deals(deals, sort_by)
+    if limit is not None:
+        deals = deals[skip : skip + limit]
+    elif skip:
+        deals = deals[skip:]
     return deals

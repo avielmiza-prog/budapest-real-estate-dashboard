@@ -1,4 +1,4 @@
-import { ExternalLink, FileText } from "lucide-react";
+import { ExternalLink, FileText, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getSpecSheetUrl } from "@/lib/api";
+import { getInvestmentMemoUrl, getSpecSheetUrl } from "@/lib/api";
 import { getSourceListingUrl, isMockListingUrl } from "@/lib/deal-links";
 import { formatCurrency, formatRooms, formatSqm } from "@/lib/format";
 import type { Currency, Deal } from "@/lib/types";
@@ -89,6 +89,11 @@ export function ListingsTable({ deals, onSelectDeal, onDealUpdated, currency, eu
                   <Button size="sm" variant="ghost" title="Download Contractor Spec Sheet" asChild>
                     <a href={getSpecSheetUrl(deal.id, eurHufRate)} target="_blank" rel="noreferrer">
                       <FileText />
+                    </a>
+                  </Button>
+                  <Button size="sm" variant="ghost" title="Download Deal Memo (PDF)" asChild>
+                    <a href={getInvestmentMemoUrl(deal.id, eurHufRate)} target="_blank" rel="noreferrer">
+                      <Sparkles />
                     </a>
                   </Button>
                   {sourceUrl ? (

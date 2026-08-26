@@ -117,6 +117,8 @@ export function getDeals(filters: DealFilters, eurHufRate: number): Promise<Deal
     favorites_only: filters.favoritesOnly || null,
     pipeline_status: filters.pipelineStatus,
     eur_huf_rate: eurHufRate,
+    sort: filters.sortBy,
+    // No `limit` — omitting it returns every relevant listing (see app/dashboard.py).
   });
 }
 
@@ -167,17 +169,10 @@ export function getSpecSheetUrl(propertyId: number, eurHufRate: number): string 
   return url.toString();
 }
 
-/** Same download-link convention as getSpecSheetUrl, for the Investment One-Pager PDF. */
-export function getInvestmentMemoUrl(
-  propertyId: number,
-  eurHufRate: number,
-  customRenovationCostEurSqm?: number | null
-): string {
+/** Same download-link convention as getSpecSheetUrl, for the (English) Deal Memo PDF. */
+export function getInvestmentMemoUrl(propertyId: number, eurHufRate: number): string {
   const url = new URL(`/properties/${propertyId}/investment-memo`, API_BASE_URL);
   url.searchParams.set("eur_huf_rate", String(eurHufRate));
-  if (customRenovationCostEurSqm !== null && customRenovationCostEurSqm !== undefined) {
-    url.searchParams.set("custom_renovation_cost_eur_sqm", String(customRenovationCostEurSqm));
-  }
   applyPasscodeQueryParam(url);
   return url.toString();
 }

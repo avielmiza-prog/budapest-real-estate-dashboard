@@ -72,7 +72,7 @@ def upsert_property_by_url(db: Session, payload: schemas.PropertyCreate) -> mode
 def list_properties(
     db: Session,
     skip: int = 0,
-    limit: int = 100,
+    limit: Optional[int] = 100,
     district: Optional[str] = None,
     districts: Optional[List[str]] = None,
     min_price_huf: Optional[float] = None,
@@ -83,6 +83,7 @@ def list_properties(
     favorites_only: bool = False,
     pipeline_status: Optional[str] = None,
 ) -> List[models.Property]:
+    """`limit=None` returns every matching row — no truncation."""
     query = db.query(models.Property)
     if districts:
         query = query.filter(models.Property.district.in_(districts))
@@ -102,7 +103,10 @@ def list_properties(
         query = query.filter(models.Property.is_favorite.is_(True))
     if pipeline_status is not None:
         query = query.filter(models.Property.pipeline_status == pipeline_status)
-    return query.order_by(models.Property.created_at.desc()).offset(skip).limit(limit).all()
+    query = query.order_by(models.Property.created_at.desc()).offset(skip)
+    if limit is not None:
+        query = query.limit(limit)
+    return query.all()
 
 
 def count_properties(db: Session) -> int:

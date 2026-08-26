@@ -38,7 +38,7 @@ def _now_iso() -> str:
     return datetime.datetime.utcnow().isoformat() + "Z"
 
 
-def try_start(max_listings: int = 30, eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE) -> Tuple[dict, bool]:
+def try_start(max_listings: int = 150, eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE) -> Tuple[dict, bool]:
     """
     Atomically claims the "running" slot if nothing is in flight. Returns
     (status_dict, claimed) — the route only hands `run_job` (below) to

@@ -5,6 +5,7 @@ import { LayoutGrid, MapPinned, RotateCcw, TableIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RangeSlider, Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -23,8 +24,11 @@ import {
   EMPTY_FILTERS,
   PIPELINE_STATUSES,
   PIPELINE_STATUS_LABELS,
+  SORT_OPTIONS,
+  SORT_OPTION_LABELS,
   type Currency,
   type DealFilters,
+  type SortOption,
   type ViewMode,
 } from "@/lib/types";
 
@@ -220,6 +224,19 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
             <RotateCcw />
             Reset
           </Button>
+
+          <Select value={filters.sortBy} onValueChange={(sortBy) => update({ sortBy: sortBy as SortOption })}>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {SORT_OPTION_LABELS[option]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
           <Tabs value={view} onValueChange={(v) => onViewChange(v as ViewMode)}>
             <TabsList>

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-from app import access_control, analyzer, crud, dashboard, deal_score, fx_rate, investment_memo, models, schemas, scraper_jobs, seed, spec_sheet
+from app import access_control, analyzer, crud, dashboard, fx_rate, investment_memo, models, schemas, scraper_jobs, seed, spec_sheet
 from app.database import SessionLocal, get_db, init_db
 from app.services import valuation_agent
 
@@ -164,7 +164,7 @@ def auth_verify(payload: schemas.PasscodeVerify):
 @app.post("/api/scraper/trigger", tags=["scraper"])
 def trigger_scraper(
     background_tasks: BackgroundTasks,
-    max_listings: int = Query(default=30, ge=1, le=200),
+    max_listings: int = Query(default=150, ge=1, le=1000),
     eur_huf_rate: float = Query(default=analyzer.DEFAULT_EUR_HUF_RATE, gt=0),
 ):
     """
@@ -200,7 +200,7 @@ def create_property(payload: schemas.PropertyCreate, db: Session = Depends(get_d
 @app.get("/properties", response_model=List[schemas.PropertyOut], tags=["properties"])
 def list_properties(
     skip: int = 0,
-    limit: int = Query(default=100, le=500),
+    limit: Optional[int] = Query(default=None, ge=1, le=5000, description="Omit for every matching row."),
     district: Optional[str] = Query(
         default=None, description="Single district or comma-separated list, e.g. 'V,VI,VII'."
     ),
@@ -355,13 +355,14 @@ def property_spec_sheet(
 def property_investment_memo(
     property_id: int,
     eur_huf_rate: float = Query(default=analyzer.DEFAULT_EUR_HUF_RATE, gt=0),
-    custom_renovation_cost_eur_sqm: Optional[float] = Query(default=None, ge=0),
     db: Session = Depends(get_db),
 ):
     """
-    Investment One-Pager: a single-page PDF with the full acquisition/exit
-    cost breakdown, ROI and rental yield across every renovation tier, and
-    the Deal Score — for handing to a partner/lender or filing per-deal.
+    Deal Memo: a single-page, executive-level PDF built from the automated
+    underwriting agent's persisted verdict (app/services/valuation_agent.py)
+    — asking price, district baseline, discount to market, renovation
+    budget, all-in investment, exit value, net profit/ROI, Deal Score, and
+    an auto-generated Investment Thesis — for handing to a partner/lender.
     """
     prop = crud.get_property(db, property_id)
     if prop is None:
@@ -374,29 +375,7 @@ def property_investment_memo(
     except ValueError:
         pass
 
-    analysis = None
-    score = None
-    try:
-        analysis = analyzer.analyze_property_by_id(
-            db,
-            property_id,
-            eur_huf_rate=eur_huf_rate,
-            custom_cost_eur_per_sqm=custom_renovation_cost_eur_sqm,
-        )
-        best = analysis.best_tier()
-        discount_percent = dashboard._discount_percent(prop, benchmark) if benchmark else None
-        score = deal_score.compute_deal_score(
-            discount_percent=discount_percent,
-            roi_percent=best.roi_percent if best else None,
-            usable_area_sqm=analysis.usable_area_sqm,
-            rooms=prop.rooms,
-        )
-    except (LookupError, ValueError):
-        pass
-
-    pdf_bytes = investment_memo.generate_investment_memo_pdf(
-        prop, benchmark=benchmark, analysis=analysis, deal_score=score
-    )
+    pdf_bytes = investment_memo.generate_investment_memo_pdf(prop, benchmark=benchmark, eur_huf_rate=eur_huf_rate)
     filename = f"investment-memo-property-{property_id}.pdf"
     return Response(
         content=pdf_bytes,
@@ -447,16 +426,21 @@ def list_deals(
         default=None, description="Filter to a single pipeline status, e.g. 'tour_scheduled'."
     ),
     eur_huf_rate: float = Query(default=analyzer.DEFAULT_EUR_HUF_RATE, gt=0),
+    sort: str = Query(
+        default="newest",
+        description=f"One of {dashboard.SORT_OPTIONS}. Unrecognized values fall back to 'newest'.",
+    ),
     skip: int = 0,
-    limit: int = Query(default=200, le=500),
+    limit: Optional[int] = Query(default=None, ge=1, le=5000, description="Omit for every matching listing."),
     db: Session = Depends(get_db),
 ):
     """
     Properties (DB-filtered by district/size/price/portal/favorite/pipeline
     status) enriched with their full renovation analysis and Deal Score,
-    further filtered by min_roi (best tier) when given. This is the single
-    endpoint the dashboard's table/card/split-map views and detail modal all
-    read from — each item already carries everything the UI needs.
+    further filtered by min_roi (best tier) when given, sorted by `sort`.
+    This is the single endpoint the dashboard's table/card/split-map views
+    and detail modal all read from — each item already carries everything
+    the UI needs. Omitting `limit` returns every relevant listing.
     """
     if pipeline_status is not None and pipeline_status not in models.PIPELINE_STATUSES:
         raise HTTPException(
@@ -474,6 +458,7 @@ def list_deals(
         favorites_only=favorites_only,
         pipeline_status=pipeline_status,
         eur_huf_rate=eur_huf_rate,
+        sort_by=sort,
         skip=skip,
         limit=limit,
     )

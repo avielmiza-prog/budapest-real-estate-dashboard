@@ -56,8 +56,8 @@ def main() -> int:
         help="Run the autonomous multi-portal agent instead of a single --portal "
         "(see scraper/agent/orchestrator.py — human-like behavior, per-portal fault isolation).",
     )
-    parser.add_argument("--max-listings", type=int, default=20, help="Stop after this many listings.")
-    parser.add_argument("--max-pages", type=int, default=5, help="Stop after this many search-result pages.")
+    parser.add_argument("--max-listings", type=int, default=150, help="Stop after this many listings.")
+    parser.add_argument("--max-pages", type=int, default=9, help="Stop after this many search-result pages.")
     parser.add_argument("--min-delay", type=float, default=1.5, help="Minimum seconds between requests.")
     parser.add_argument("--max-delay", type=float, default=3.5, help="Maximum seconds between requests.")
     parser.add_argument("--eur-huf-rate", type=float, default=DEFAULT_EUR_HUF_RATE, help="EUR->HUF rate for renovation cost math.")
