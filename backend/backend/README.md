@@ -29,10 +29,14 @@ change that, e.g. for a deployed frontend's real origin.
 
 See `../../render.yaml` for the Blueprint. The one step that's easy to miss
 if you set the service up manually instead: the build command must run
-`playwright install --with-deps chromium` *after* `pip install`, not just
+`python -m playwright install chromium` *after* `pip install`, not just
 `pip install -r requirements.txt` alone — pip only installs the `playwright`
-Python package, not the actual browser binary it drives. Without this step,
-every scan (`POST /api/scraper/trigger`) fails instantly with
+Python package, not the actual browser binary it drives. Don't add
+`--with-deps` to that: it additionally shells out to `apt-get`, which needs
+root and fails the build outright under Render's non-root build user; plain
+`install chromium` is sufficient since that build already bundles its own
+shared libraries. Without the install step at all, every scan
+(`POST /api/scraper/trigger`) fails instantly with
 `BrowserType.launch: Executable doesn't exist at .../ms-playwright/...`.
 
 ## Frontend

@@ -10,12 +10,19 @@
 # — that's a separate download step. Without it, every scraper run fails
 # instantly with "BrowserType.launch: Executable doesn't exist at
 # .../ms-playwright/chromium-1140/...".
+#
+# Deliberately `playwright install chromium` WITHOUT `--with-deps`: that
+# flag additionally runs `apt-get install` to pull in OS-level libraries,
+# which needs root — Render's build step runs as a non-root user, so
+# `--with-deps` fails the build outright there instead of just installing
+# the browser. Chromium's Playwright build already bundles the shared
+# libraries it needs, so plain `install chromium` is sufficient here.
 services:
   - type: web
     name: budapest-real-estate-dashboard
     runtime: python
     rootDir: backend/backend
-    buildCommand: "pip install -r requirements.txt && playwright install --with-deps chromium"
+    buildCommand: "pip install -r requirements.txt && python -m playwright install chromium"
     startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PYTHON_VERSION
