@@ -74,6 +74,16 @@ export interface Underwriting {
   updated_at: string | null;
 }
 
+// Standardized English condition tag — see backend/app/condition_classifier.py.
+export type ConditionTag = "Needs Renovation" | "Average" | "Renovated" | "New Construction";
+
+export const CONDITION_TAG_COLORS: Record<ConditionTag, string> = {
+  "Needs Renovation": "bg-amber-100 text-amber-800 border-amber-200",
+  Average: "bg-slate-100 text-slate-700 border-slate-200",
+  Renovated: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  "New Construction": "bg-blue-100 text-blue-800 border-blue-200",
+};
+
 export interface Deal {
   id: number;
   title: string;
@@ -87,7 +97,9 @@ export interface Deal {
   price_per_sqm: number | null;
   url: string | null;
   source_url: string | null; // the exact source-portal listing page (alias of `url`)
+  duplicate_source_urls: string[]; // other portals' URLs for this same listing — see scraper/dedup.py
   condition: string | null;
+  condition_tag: ConditionTag; // standardized English tag derived from `condition` — see app.condition_classifier
   images: string[] | null;
   portal: string | null;
   latitude: number | null;
@@ -146,6 +158,8 @@ export interface DealFilters {
   maxSize: number | null; // sqm
   minPrice: number | null; // HUF
   maxPrice: number | null; // HUF
+  minPricePerSqm: number | null; // HUF/sqm
+  maxPricePerSqm: number | null; // HUF/sqm
   portals: string[]; // e.g. ["jofogas", "ingatlanbazar"] — empty means "all portals"
   favoritesOnly: boolean;
   pipelineStatus: PipelineStatus | null; // null means "all statuses"
@@ -159,6 +173,8 @@ export const EMPTY_FILTERS: DealFilters = {
   maxSize: null,
   minPrice: null,
   maxPrice: null,
+  minPricePerSqm: null,
+  maxPricePerSqm: null,
   portals: [],
   favoritesOnly: false,
   pipelineStatus: null,

@@ -37,8 +37,9 @@ import logging
 from typing import Dict, List, Optional
 
 from app import analyzer
-from app.database import init_db
+from app.database import SessionLocal, init_db
 from scraper import playwright_runtime
+from scraper.dedup import dedup_properties
 from scraper.pipeline import ScrapeResult, run_scrape_with_browser, store_and_analyze, try_http_fetch
 from scraper.registry import PORTALS, get_scraper
 
@@ -114,7 +115,7 @@ class _LazyBrowser:
 
 def run_agent(
     max_listings: int = 150,
-    max_pages: int = 5,
+    max_pages: int = 9,
     delay_range: tuple = (1.5, 3.5),
     headless: bool = True,
     eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE,
@@ -177,5 +178,24 @@ def run_agent(
             results.extend(portal_results)
     finally:
         lazy_browser.close()
+
+    found = len(results)
+    filtered_anomalies = sum(1 for r in results if r.anomaly)
+    stored = sum(1 for r in results if r.stored)
+
+    db = SessionLocal()
+    try:
+        deduplicated = dedup_properties(db)
+    finally:
+        db.close()
+
+    live_deals_added = max(stored - deduplicated, 0)
+    logger.info(
+        "[SCAN CYCLE] Found: %d | Filtered Anomalies: %d | Deduplicated: %d | Live Deals Added: %d",
+        found,
+        filtered_anomalies,
+        deduplicated,
+        live_deals_added,
+    )
 
     return results

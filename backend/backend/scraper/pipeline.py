@@ -32,7 +32,9 @@ from app.services import valuation_agent
 from app.database import SessionLocal, init_db
 from scraper import geocode, playwright_runtime, robots
 from scraper.agent import human_behavior
+from scraper.anomaly_filter import anomaly_reason
 from scraper.base import BaseScraper, RawListing
+from scraper.dedup import dedup_properties
 from scraper.normalize import normalize_listing
 from scraper.retry import with_retry
 from scraper.stealth import (
@@ -53,6 +55,7 @@ class ScrapeResult:
     property_id: Optional[int] = None
     analysis: Optional[dict] = None
     error: Optional[str] = None
+    anomaly: bool = False  # True when `stored=False` specifically because of an anomaly_filter guardrail
 
     def to_dict(self) -> dict:
         return {
@@ -61,6 +64,7 @@ class ScrapeResult:
             "property_id": self.property_id,
             "analysis": self.analysis,
             "error": self.error,
+            "anomaly": self.anomaly,
         }
 
 
@@ -224,10 +228,15 @@ def _fill_missing_coordinates(normalized: dict, db) -> None:
 
 
 def store_and_analyze(raw: RawListing, portal_name: str, url: str, eur_huf_rate: float) -> ScrapeResult:
-    """Shared tail of both scrape paths: normalize -> geocode -> upsert -> run app.analyzer."""
+    """Shared tail of both scrape paths: normalize -> anomaly-filter -> geocode -> upsert -> run app.analyzer."""
     normalized = normalize_listing(raw, portal_name)
     if normalized is None:
         return ScrapeResult(url=url, stored=False, error="not enough data to store (missing title/price)")
+
+    reason = anomaly_reason(normalized)
+    if reason is not None:
+        logger.info("[anomaly] discarding %s: %s", url, reason)
+        return ScrapeResult(url=url, stored=False, error=f"anomaly filtered: {reason}", anomaly=True)
 
     db = SessionLocal()
     try:

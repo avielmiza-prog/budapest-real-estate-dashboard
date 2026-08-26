@@ -3,6 +3,7 @@ uvicorn[standard]==0.32.1
 sqlalchemy==2.0.36
 pydantic==2.10.3
 python-dotenv==1.0.1
+apscheduler==3.10.4   # twice-daily automated scan cycle — see app/main.py's on_startup()
 
 # Postgres driver for production (DATABASE_URL=postgresql://...) — SQLite
 # (the local-dev default in app/database.py) needs no extra driver.

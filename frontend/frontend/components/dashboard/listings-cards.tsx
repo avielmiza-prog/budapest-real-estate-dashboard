@@ -12,6 +12,7 @@ import { getSourceListingUrl, isMockListingUrl } from "@/lib/deal-links";
 import { formatCurrency, formatRooms, formatSqm } from "@/lib/format";
 import type { Currency, Deal } from "@/lib/types";
 
+import { ConditionBadge } from "./condition-badge";
 import { DealMicroBadges } from "./deal-micro-badges";
 import { DealScoreBadge } from "./deal-score-badge";
 import { FavoriteToggle, PipelineStatusSelect } from "./deal-actions";
@@ -100,7 +101,10 @@ export function ListingsCards({ deals, onSelectDeal, onDealUpdated, currency, eu
             </CardHeader>
 
             <CardContent className="flex-1 space-y-2 pb-2 text-sm text-muted-foreground">
-              <DealMicroBadges deal={deal} className="flex flex-wrap gap-1" />
+              <div className="flex flex-wrap items-center gap-1">
+                <ConditionBadge tag={deal.condition_tag} />
+                <DealMicroBadges deal={deal} className="flex flex-wrap gap-1" />
+              </div>
               <div className="flex items-center justify-between">
                 <span>{formatCurrency(deal.price_huf, currency, eurHufRate)}</span>
                 <span>{formatCurrency(deal.price_per_sqm, currency, eurHufRate)}/sqm</span>

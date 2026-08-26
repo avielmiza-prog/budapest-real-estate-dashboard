@@ -6,11 +6,14 @@ Run locally with:
 
 Interactive API docs will then be at http://127.0.0.1:8000/docs
 """
+import asyncio
 import logging
 import os
 import re
 from typing import List, Optional
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -21,6 +24,35 @@ logger = logging.getLogger(__name__)
 from app import access_control, analyzer, crud, dashboard, fx_rate, investment_memo, models, schemas, scraper_jobs, seed, spec_sheet
 from app.database import SessionLocal, get_db, init_db
 from app.services import valuation_agent
+
+# Twice-daily automated scan cycle (10:00 + 18:00 Europe/Budapest) — see
+# on_startup() below and POST /api/scan/trigger for a manual/webhook-driven
+# run of the same job. Module-level (not env-frozen) so tests can flip it
+# off after import, the same way they force access_control.ACCESS_PASSCODE
+# off — a pytest run should never accidentally arm a live background
+# scraper against real portals.
+SCHEDULER_ENABLED = os.getenv("DISABLE_SCHEDULER", "").lower() not in ("1", "true", "yes")
+SCHEDULED_SCAN_MAX_LISTINGS = 150
+scheduler = AsyncIOScheduler(timezone="Europe/Budapest")
+
+
+async def _run_scheduled_scan() -> None:
+    """
+    APScheduler job body: runs the exact same claim-and-run flow as the
+    manual trigger endpoints (scraper_jobs.try_start/run_job), so a
+    scheduled run and a manual "Scan Market" click can never overlap — one
+    is-running flag guards both. Runs the (synchronous, Playwright-capable)
+    scraper in a worker thread via asyncio.to_thread so it never blocks the
+    event loop the rest of the API is served from.
+    """
+    status, claimed = scraper_jobs.try_start(
+        max_listings=SCHEDULED_SCAN_MAX_LISTINGS, eur_huf_rate=analyzer.DEFAULT_EUR_HUF_RATE
+    )
+    if not claimed:
+        logger.info("[scheduler] skipping scheduled scan cycle — one is already running: %s", status)
+        return
+    logger.info("[scheduler] starting scheduled scan cycle")
+    await asyncio.to_thread(scraper_jobs.run_job, SCHEDULED_SCAN_MAX_LISTINGS, analyzer.DEFAULT_EUR_HUF_RATE)
 
 def _parse_districts(district: Optional[str]) -> Optional[List[str]]:
     """
@@ -80,7 +112,7 @@ app.add_middleware(access_control.PasscodeGateMiddleware)
 
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     init_db()
     # District benchmarks only — never listings. See app/seed.py's docstring
     # for why: this is what makes deal_score/analysis come back non-null on
@@ -91,6 +123,23 @@ def on_startup() -> None:
         seed.seed_district_benchmarks_if_empty(db)
     finally:
         db.close()
+
+    if SCHEDULER_ENABLED and not scheduler.running:
+        scheduler.add_job(
+            _run_scheduled_scan,
+            CronTrigger(hour="10,18", minute=0, timezone="Europe/Budapest"),
+            id="twice_daily_scan",
+            replace_existing=True,
+            misfire_grace_time=3600,  # still run a scan that missed its exact slot by up to an hour (e.g. a redeploy)
+        )
+        scheduler.start()
+        logger.info("[scheduler] twice-daily scan cycle armed for 10:00 and 18:00 Europe/Budapest")
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 def _cors_headers_for_origin(origin: Optional[str]) -> dict:
@@ -186,6 +235,31 @@ def trigger_scraper(
 @app.get("/api/scraper/status", tags=["scraper"])
 def scraper_status():
     return scraper_jobs.get_status()
+
+
+@app.post("/api/scan/trigger", tags=["scraper"])
+def trigger_scan(
+    background_tasks: BackgroundTasks,
+    max_listings: int = Query(default=SCHEDULED_SCAN_MAX_LISTINGS, ge=1, le=1000),
+    eur_huf_rate: float = Query(default=analyzer.DEFAULT_EUR_HUF_RATE, gt=0),
+):
+    """
+    Same claim-and-run flow as POST /api/scraper/trigger (they share one
+    is-running flag, so they can't double-run each other) — a distinct,
+    stable path meant for external cron/webhook callers and the twice-daily
+    APScheduler job (see on_startup()) to hit, independent of whatever the
+    frontend's own "Scan Market" button happens to be wired to. Subject to
+    the same ACCESS_PASSCODE gate as every other endpoint when that's
+    configured (see app/access_control.py) — "open" here means no
+    additional auth beyond that, not a deliberate bypass of it.
+    """
+    status, claimed = scraper_jobs.try_start(max_listings=max_listings, eur_huf_rate=eur_huf_rate)
+    if claimed:
+        background_tasks.add_task(scraper_jobs.run_job, max_listings, eur_huf_rate)
+        message = "Scan started successfully"
+    else:
+        message = "A scan is already running"
+    return {"status": "running", "message": message, **status}
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +449,12 @@ def property_investment_memo(
     except ValueError:
         pass
 
-    pdf_bytes = investment_memo.generate_investment_memo_pdf(prop, benchmark=benchmark, eur_huf_rate=eur_huf_rate)
+    _analysis_dict, best_tier, _discount, score = dashboard.compute_live_deal_metrics(db, prop, eur_huf_rate)
+    underwriting = dashboard.build_underwriting_dict(prop, best_tier, score)
+
+    pdf_bytes = investment_memo.generate_investment_memo_pdf(
+        prop, benchmark=benchmark, eur_huf_rate=eur_huf_rate, underwriting=underwriting
+    )
     filename = f"investment-memo-property-{property_id}.pdf"
     return Response(
         content=pdf_bytes,
@@ -418,6 +497,8 @@ def list_deals(
     max_size_sqm: Optional[float] = None,
     min_price_huf: Optional[float] = None,
     max_price_huf: Optional[float] = None,
+    min_price_per_sqm: Optional[float] = None,
+    max_price_per_sqm: Optional[float] = None,
     portal: Optional[str] = Query(
         default=None, description="Single portal or comma-separated list, e.g. 'jofogas,ingatlanbazar'."
     ),
@@ -454,6 +535,8 @@ def list_deals(
         max_size_sqm=max_size_sqm,
         min_price_huf=min_price_huf,
         max_price_huf=max_price_huf,
+        min_price_per_sqm=min_price_per_sqm,
+        max_price_per_sqm=max_price_per_sqm,
         portals=_parse_portals(portal),
         favorites_only=favorites_only,
         pipeline_status=pipeline_status,
@@ -461,6 +544,57 @@ def list_deals(
         sort_by=sort,
         skip=skip,
         limit=limit,
+    )
+
+
+@app.get("/deals/export.csv", tags=["dashboard"])
+def export_deals_csv(
+    district: Optional[str] = Query(default=None),
+    min_roi: Optional[float] = Query(default=None),
+    min_size_sqm: Optional[float] = None,
+    max_size_sqm: Optional[float] = None,
+    min_price_huf: Optional[float] = None,
+    max_price_huf: Optional[float] = None,
+    min_price_per_sqm: Optional[float] = None,
+    max_price_per_sqm: Optional[float] = None,
+    portal: Optional[str] = Query(default=None),
+    favorites_only: bool = False,
+    pipeline_status: Optional[str] = Query(default=None),
+    eur_huf_rate: float = Query(default=analyzer.DEFAULT_EUR_HUF_RATE, gt=0),
+    sort: str = Query(default="newest"),
+    db: Session = Depends(get_db),
+):
+    """
+    CSV export of the exact same filtered/sorted set GET /deals would
+    return for these params (full underwriting metrics included, no
+    pagination — every matching listing is one row) — powers the
+    dashboard's "Export CSV" button.
+    """
+    if pipeline_status is not None and pipeline_status not in models.PIPELINE_STATUSES:
+        raise HTTPException(
+            status_code=422, detail=f"pipeline_status must be one of {models.PIPELINE_STATUSES}, got {pipeline_status!r}"
+        )
+    deals = dashboard.list_deals(
+        db,
+        districts=_parse_districts(district),
+        min_roi=min_roi,
+        min_size_sqm=min_size_sqm,
+        max_size_sqm=max_size_sqm,
+        min_price_huf=min_price_huf,
+        max_price_huf=max_price_huf,
+        min_price_per_sqm=min_price_per_sqm,
+        max_price_per_sqm=max_price_per_sqm,
+        portals=_parse_portals(portal),
+        favorites_only=favorites_only,
+        pipeline_status=pipeline_status,
+        eur_huf_rate=eur_huf_rate,
+        sort_by=sort,
+    )
+    csv_text = dashboard.deals_to_csv(deals)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="budapest-deals-export.csv"'},
     )
 
 

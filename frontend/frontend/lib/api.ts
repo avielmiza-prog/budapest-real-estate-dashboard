@@ -105,21 +105,46 @@ export function getDashboardStats(eurHufRate: number): Promise<DashboardStats> {
   return getJson<DashboardStats>("/dashboard/stats", { eur_huf_rate: eurHufRate });
 }
 
-export function getDeals(filters: DealFilters, eurHufRate: number): Promise<Deal[]> {
-  return getJson<Deal[]>("/deals", {
+function dealFiltersToParams(
+  filters: DealFilters,
+  eurHufRate: number
+): Record<string, string | number | boolean | null | undefined> {
+  return {
     district: filters.districts.length > 0 ? filters.districts.join(",") : null,
     min_roi: filters.minRoi,
     min_size_sqm: filters.minSize,
     max_size_sqm: filters.maxSize,
     min_price_huf: filters.minPrice,
     max_price_huf: filters.maxPrice,
+    min_price_per_sqm: filters.minPricePerSqm,
+    max_price_per_sqm: filters.maxPricePerSqm,
     portal: filters.portals.length > 0 ? filters.portals.join(",") : null,
     favorites_only: filters.favoritesOnly || null,
     pipeline_status: filters.pipelineStatus,
     eur_huf_rate: eurHufRate,
     sort: filters.sortBy,
-    // No `limit` — omitting it returns every relevant listing (see app/dashboard.py).
-  });
+  };
+}
+
+export function getDeals(filters: DealFilters, eurHufRate: number): Promise<Deal[]> {
+  // No `limit` — omitting it returns every relevant listing (see app/dashboard.py).
+  return getJson<Deal[]>("/deals", dealFiltersToParams(filters, eurHufRate));
+}
+
+/**
+ * Direct download URL for GET /deals/export.csv — the exact same
+ * filtered/sorted set getDeals() would return for these filters, as a CSV
+ * file. Same plain-<a>-navigation convention as getSpecSheetUrl below.
+ */
+export function getDealsExportCsvUrl(filters: DealFilters, eurHufRate: number): string {
+  const url = new URL("/deals/export.csv", API_BASE_URL);
+  for (const [key, value] of Object.entries(dealFiltersToParams(filters, eurHufRate))) {
+    if (value !== null && value !== undefined && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  applyPasscodeQueryParam(url);
+  return url.toString();
 }
 
 /**

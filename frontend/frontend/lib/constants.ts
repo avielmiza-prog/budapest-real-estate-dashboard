@@ -38,3 +38,10 @@ export const PRICE_FILTER_MAX_HUF = 300_000_000;
 
 export const ROI_FILTER_MIN_PERCENT = -20;
 export const ROI_FILTER_MAX_PERCENT = 60;
+
+// Backend anomaly guardrails (scraper/anomaly_filter.py) reject anything
+// outside 400k-4.5M HUF/sqm, so real listings never fall outside this
+// range — a little headroom above/below keeps the slider's own extremes
+// from looking like an artificial clamp.
+export const PRICE_PER_SQM_FILTER_MIN_HUF = 0;
+export const PRICE_PER_SQM_FILTER_MAX_HUF = 5_000_000;

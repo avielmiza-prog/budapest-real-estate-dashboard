@@ -6,12 +6,15 @@ Kept out of main.py so the route handlers stay thin, and out of analyzer.py
 since analyzer.py is single-property math with zero DB awareness — this
 module is the layer that fans analyzer.py out across many properties.
 """
+import csv
 import datetime
+import io
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
 from app import analyzer, crud, deal_score as deal_score_module, models
+from app.condition_classifier import classify_condition_tag
 
 
 def _district_benchmark_or_none(db: Session, district: str) -> Optional[models.DistrictBenchmark]:
@@ -46,6 +49,99 @@ def _discount_percent(prop: models.Property, benchmark: models.DistrictBenchmark
     if not reference or not prop.price_per_sqm:
         return None
     return round((reference - prop.price_per_sqm) / reference * 100, 2)
+
+
+def compute_live_deal_metrics(db: Session, prop: models.Property, eur_huf_rate: float) -> tuple:
+    """
+    (analysis_dict, best_tier, discount_percent, score) for one property —
+    the live (app.analyzer + app.deal_score) readout shared by list_deals()
+    and app.main's investment-memo route, so both compute this identically.
+    analysis_dict/best_tier are None when there's no benchmark yet or the
+    district/size/price can't be parsed; discount_percent/score degrade
+    gracefully in that case too (see app.deal_score.compute_deal_score).
+    """
+    analysis_dict = None
+    best_tier = None
+    try:
+        analysis = analyzer.analyze_property_by_id(db, prop.id, eur_huf_rate=eur_huf_rate)
+        analysis_dict = analysis.to_dict()
+        best = analysis.best_tier()
+        best_tier = best.to_dict() if best else None
+    except (LookupError, ValueError):
+        pass  # no benchmark yet, or unparseable district/missing size/price — leave analysis as None
+
+    benchmark = _district_benchmark_or_none(db, prop.district)
+    discount_percent = _discount_percent(prop, benchmark) if benchmark else None
+    usable_area_sqm = analysis_dict["usable_area_sqm"] if analysis_dict else prop.size_sqm
+    score = deal_score_module.compute_deal_score(
+        discount_percent=discount_percent,
+        roi_percent=best_tier["roi_percent"] if best_tier else None,
+        usable_area_sqm=usable_area_sqm,
+        rooms=prop.rooms,
+    )
+    return analysis_dict, best_tier, discount_percent, score
+
+
+def build_underwriting_dict(prop: models.Property, best_tier: Optional[dict], score: Optional[int]) -> Optional[dict]:
+    """
+    The persisted agent verdict (prop.underwriting_*) is the primary source
+    for the numeric fields here, but it's null until a scan has actually
+    underwritten this row (or if the agent hit "no_benchmark"/
+    "insufficient_data"). Whenever a live analysis exists (`best_tier`/
+    `score`, both from app.analyzer + app.deal_score — see list_deals()),
+    backfill from it instead of returning null: the underwriting agent and
+    app.analyzer's best tier are two independently-computed but equivalent
+    readouts of the same deal, so this never fabricates a number, it just
+    prefers whichever of the two actually ran. Only a property with neither
+    (no benchmark AND analysis failed) still comes back null — nothing left
+    to compute it from. `status`/`confidence_tag`/`updated_at` are left
+    exactly as persisted (never backfilled), so callers can still tell a
+    real agent verdict apart from a live-only fallback.
+
+    Shared by list_deals() (below) and app.main's investment-memo route, so
+    the Deal Memo PDF and the /deals list can never disagree about whether
+    a given deal's Score/ROI/Net Profit is "null" or not.
+    """
+    has_underwriting = prop.underwriting_updated_at is not None
+    if not has_underwriting and best_tier is None:
+        return None
+
+    return {
+        "estimated_market_value_huf": (
+            prop.underwriting_market_value_huf
+            if prop.underwriting_market_value_huf is not None
+            else (best_tier["exit_price_huf"] if best_tier else None)
+        ),
+        "renovation_cost_huf": (
+            prop.underwriting_renovation_cost_huf
+            if prop.underwriting_renovation_cost_huf is not None
+            else (best_tier["renovation_cost_huf"] if best_tier else None)
+        ),
+        "total_investment_huf": (
+            prop.underwriting_total_investment_huf
+            if prop.underwriting_total_investment_huf is not None
+            else (best_tier["total_investment_huf"] if best_tier else None)
+        ),
+        "net_profit_huf": (
+            prop.underwriting_net_profit_huf
+            if prop.underwriting_net_profit_huf is not None
+            else (best_tier["net_profit_huf"] if best_tier else None)
+        ),
+        "flip_roi_percent": (
+            prop.underwriting_flip_roi_percent
+            if prop.underwriting_flip_roi_percent is not None
+            else (best_tier["roi_percent"] if best_tier else None)
+        ),
+        "rental_yield_percent": (
+            prop.underwriting_rental_yield_percent
+            if prop.underwriting_rental_yield_percent is not None
+            else (best_tier["net_yield_percent"] if best_tier else None)
+        ),
+        "deal_score": prop.underwriting_deal_score if prop.underwriting_deal_score is not None else score,
+        "status": prop.underwriting_status,
+        "confidence_tag": prop.underwriting_confidence_tag,
+        "updated_at": prop.underwriting_updated_at.isoformat() if prop.underwriting_updated_at else None,
+    }
 
 
 def compute_stats(db: Session, eur_huf_rate: float, top_n: int = 5) -> dict:
@@ -146,6 +242,8 @@ def list_deals(
     max_size_sqm: Optional[float] = None,
     min_price_huf: Optional[float] = None,
     max_price_huf: Optional[float] = None,
+    min_price_per_sqm: Optional[float] = None,
+    max_price_per_sqm: Optional[float] = None,
     portals: Optional[List[str]] = None,
     favorites_only: bool = False,
     pipeline_status: Optional[str] = None,
@@ -177,6 +275,8 @@ def list_deals(
         districts=districts,
         min_price_huf=min_price_huf,
         max_price_huf=max_price_huf,
+        min_price_per_sqm=min_price_per_sqm,
+        max_price_per_sqm=max_price_per_sqm,
         min_size_sqm=min_size_sqm,
         max_size_sqm=max_size_sqm,
         portals=portals,
@@ -186,29 +286,18 @@ def list_deals(
 
     deals = []
     for prop in properties:
-        analysis_dict = None
-        best_tier = None
-        try:
-            analysis = analyzer.analyze_property_by_id(db, prop.id, eur_huf_rate=eur_huf_rate)
-            analysis_dict = analysis.to_dict()
-            best = analysis.best_tier()
-            best_tier = best.to_dict() if best else None
-        except (LookupError, ValueError):
-            pass  # no benchmark yet, or unparseable district/missing size/price — leave analysis as None
+        analysis_dict, best_tier, discount_percent, score = compute_live_deal_metrics(db, prop, eur_huf_rate)
 
         if min_roi is not None:
             if best_tier is None or best_tier["roi_percent"] is None or best_tier["roi_percent"] < min_roi:
                 continue
 
-        benchmark = _district_benchmark_or_none(db, prop.district)
-        discount_percent = _discount_percent(prop, benchmark) if benchmark else None
-        usable_area_sqm = analysis_dict["usable_area_sqm"] if analysis_dict else prop.size_sqm
-        score = deal_score_module.compute_deal_score(
-            discount_percent=discount_percent,
-            roi_percent=best_tier["roi_percent"] if best_tier else None,
-            usable_area_sqm=usable_area_sqm,
-            rooms=prop.rooms,
-        )
+        # The persisted agent verdict (prop.underwriting_*) is the primary
+        # source for these four numbers, but it's null until a scan has
+        # actually underwritten this row (or if the agent hit "no_benchmark"/
+        # "insufficient_data"). See build_underwriting_dict()'s docstring for
+        # the null-backfill rule.
+        underwriting = build_underwriting_dict(prop, best_tier, score)
 
         deals.append(
             {
@@ -224,7 +313,9 @@ def list_deals(
                 "price_per_sqm": prop.price_per_sqm,
                 "url": prop.url,
                 "source_url": prop.url,  # alias for `url` — the exact source-portal listing page
+                "duplicate_source_urls": prop.duplicate_source_urls or [],
                 "condition": prop.condition,
+                "condition_tag": classify_condition_tag(prop.condition),
                 "images": prop.images or [],
                 "portal": prop.portal,
                 "latitude": prop.latitude,
@@ -237,23 +328,10 @@ def list_deals(
                 "discount_percent": discount_percent,
                 "deal_score": score,
                 "deal_score_band": deal_score_module.score_band(score),
-                # Persisted verdict from app/services/valuation_agent.py — computed
-                # once per scan, not live like the fields above. See that module's
-                # docstring; underwriting_updated_at says how stale this is.
-                "underwriting": {
-                    "estimated_market_value_huf": prop.underwriting_market_value_huf,
-                    "renovation_cost_huf": prop.underwriting_renovation_cost_huf,
-                    "total_investment_huf": prop.underwriting_total_investment_huf,
-                    "net_profit_huf": prop.underwriting_net_profit_huf,
-                    "flip_roi_percent": prop.underwriting_flip_roi_percent,
-                    "rental_yield_percent": prop.underwriting_rental_yield_percent,
-                    "deal_score": prop.underwriting_deal_score,
-                    "status": prop.underwriting_status,
-                    "confidence_tag": prop.underwriting_confidence_tag,
-                    "updated_at": prop.underwriting_updated_at.isoformat() if prop.underwriting_updated_at else None,
-                }
-                if prop.underwriting_updated_at is not None
-                else None,
+                # Persisted verdict from app/services/valuation_agent.py, with
+                # nulls backfilled from the live analysis above — see comment
+                # above `has_underwriting`.
+                "underwriting": underwriting,
             }
         )
 
@@ -263,3 +341,34 @@ def list_deals(
     elif skip:
         deals = deals[skip:]
     return deals
+
+
+# Column order for deals_to_csv() — deliberately flat (no nested objects),
+# pulling the underwriting metrics out of the nested `underwriting` dict so
+# every row is spreadsheet-ready with no post-processing.
+_CSV_COLUMNS = [
+    "id", "title", "district", "address", "size_sqm", "rooms", "balcony_sqm",
+    "price_huf", "price_eur", "price_per_sqm", "condition", "condition_tag",
+    "portal", "url", "duplicate_source_urls", "pipeline_status", "is_favorite", "created_at",
+    "discount_percent", "deal_score", "deal_score_band",
+    "underwriting_estimated_market_value_huf", "underwriting_renovation_cost_huf",
+    "underwriting_total_investment_huf", "underwriting_net_profit_huf",
+    "underwriting_flip_roi_percent", "underwriting_rental_yield_percent",
+    "underwriting_deal_score", "underwriting_status", "underwriting_confidence_tag",
+    "underwriting_updated_at",
+]
+
+
+def deals_to_csv(deals: List[dict]) -> str:
+    """Flattens list_deals()'s output (including the nested `underwriting` dict) into a CSV string."""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    for deal in deals:
+        underwriting = deal.get("underwriting") or {}
+        row = dict(deal)
+        row["duplicate_source_urls"] = ";".join(deal.get("duplicate_source_urls") or [])
+        for key, value in underwriting.items():
+            row[f"underwriting_{key}"] = value
+        writer.writerow(row)
+    return buffer.getvalue()

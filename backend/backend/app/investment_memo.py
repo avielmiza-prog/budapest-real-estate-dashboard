@@ -23,7 +23,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from app import models
+from app import deal_score as deal_score_module, models
+from app.condition_classifier import classify_condition_tag
 
 
 def _fmt_huf(value: Optional[float]) -> str:
@@ -76,17 +77,19 @@ def _district_baseline_and_discount(
 
 def _investment_thesis(
     prop: models.Property,
+    underwriting: Optional[dict],
     district_baseline: Optional[float],
     discount_percent: Optional[float],
 ) -> str:
-    if prop.underwriting_updated_at is None:
+    if underwriting is None:
         return (
-            "This listing has not yet been processed by the automated underwriting agent — figures above "
-            "reflect asking-price and specs only. Run a market scan, or POST /properties/{}/underwrite, to "
-            "generate a full underwriting verdict.".format(prop.id)
+            "This listing has no district benchmark and no automated underwriting verdict on file yet, so a "
+            "full investment thesis can't be computed — asking price and specs above are still based on the "
+            "listing's own data. Run a market scan, or POST /properties/{}/underwrite, once a benchmark exists "
+            "for this district.".format(prop.id)
         )
 
-    if prop.underwriting_status == "no_benchmark" or district_baseline is None:
+    if district_baseline is None:
         return (
             "No district benchmark is on file for this property yet, so a full underwriting verdict "
             "(exit value, profit, ROI) could not be computed. Asking price and renovation budget above are "
@@ -105,21 +108,21 @@ def _investment_thesis(
         else f"This {rooms} {sqm} property is located in District {district}."
     )
 
-    if prop.underwriting_total_investment_huf and prop.underwriting_market_value_huf:
+    if underwriting["total_investment_huf"] and underwriting["estimated_market_value_huf"]:
         sentence_2 = (
-            f" After an estimated {_fmt_huf(prop.underwriting_renovation_cost_huf)} renovation, acquisition tax "
-            f"and closing costs, the all-in investment is {_fmt_huf(prop.underwriting_total_investment_huf)} "
-            f"against a projected post-renovation exit value of {_fmt_huf(prop.underwriting_market_value_huf)}, "
+            f" After an estimated {_fmt_huf(underwriting['renovation_cost_huf'])} renovation, acquisition tax "
+            f"and closing costs, the all-in investment is {_fmt_huf(underwriting['total_investment_huf'])} "
+            f"against a projected post-renovation exit value of {_fmt_huf(underwriting['estimated_market_value_huf'])}, "
             f"net of a 3% broker fee on sale."
         )
     else:
         sentence_2 = ""
 
-    if prop.underwriting_net_profit_huf is not None and prop.underwriting_flip_roi_percent is not None:
-        outcome = "a projected net profit of" if prop.underwriting_net_profit_huf >= 0 else "a projected net loss of"
+    if underwriting["net_profit_huf"] is not None and underwriting["flip_roi_percent"] is not None:
+        outcome = "a projected net profit of" if underwriting["net_profit_huf"] >= 0 else "a projected net loss of"
         sentence_3 = (
-            f" That implies {outcome} {_fmt_huf(prop.underwriting_net_profit_huf)} "
-            f"({_fmt_pct(prop.underwriting_flip_roi_percent)} net ROI)."
+            f" That implies {outcome} {_fmt_huf(underwriting['net_profit_huf'])} "
+            f"({_fmt_pct(underwriting['flip_roi_percent'])} net ROI)."
         )
     else:
         sentence_3 = ""
@@ -128,15 +131,16 @@ def _investment_thesis(
         "High Potential Flip": " The agent flags this as a High Potential Flip candidate given its strong projected ROI.",
         "Buy & Hold Yield": " The agent flags this as a Buy & Hold Yield candidate given its rental income profile.",
     }
-    sentence_4 = tag_sentences.get(prop.underwriting_confidence_tag or "", "")
+    sentence_4 = tag_sentences.get(underwriting["confidence_tag"] or "", "")
 
     risk_sentences = {
         "overpriced": " Caution: asking price is above the district's turnkey median.",
         "below_hurdle_roi": " Caution: projected flip ROI falls below the fund's 12% minimum hurdle rate.",
     }
     sentence_5 = ""
-    if prop.underwriting_status and prop.underwriting_status.startswith("risk:"):
-        reasons = prop.underwriting_status.replace("risk:", "").split(",")
+    status = underwriting["status"] or ""
+    if status.startswith("risk:"):
+        reasons = status.replace("risk:", "").split(",")
         sentence_5 = "".join(risk_sentences.get(r, "") for r in reasons)
 
     return (sentence_1 + sentence_2 + sentence_3 + sentence_4 + sentence_5).strip()
@@ -146,8 +150,29 @@ def generate_investment_memo_pdf(
     prop: models.Property,
     benchmark: Optional[models.DistrictBenchmark],
     eur_huf_rate: float,
+    underwriting: Optional[dict] = None,
 ) -> bytes:
-    """Returns the finished one-page Deal Memo PDF as bytes."""
+    """
+    Returns the finished one-page Deal Memo PDF as bytes. `underwriting`
+    should be app.dashboard.build_underwriting_dict()'s output — the same
+    null-backfilled shape /deals returns, so this PDF and the dashboard
+    list never disagree about whether a deal's Score/ROI/Net Profit is
+    null. Falls back to reading prop.underwriting_* directly (no live-
+    analysis backfill) when the caller doesn't pass one.
+    """
+    if underwriting is None and prop.underwriting_updated_at is not None:
+        underwriting = {
+            "estimated_market_value_huf": prop.underwriting_market_value_huf,
+            "renovation_cost_huf": prop.underwriting_renovation_cost_huf,
+            "total_investment_huf": prop.underwriting_total_investment_huf,
+            "net_profit_huf": prop.underwriting_net_profit_huf,
+            "flip_roi_percent": prop.underwriting_flip_roi_percent,
+            "rental_yield_percent": prop.underwriting_rental_yield_percent,
+            "deal_score": prop.underwriting_deal_score,
+            "status": prop.underwriting_status,
+            "confidence_tag": prop.underwriting_confidence_tag,
+            "updated_at": prop.underwriting_updated_at.isoformat() if prop.underwriting_updated_at else None,
+        }
     import io
 
     buffer = io.BytesIO()
@@ -196,6 +221,7 @@ def generate_investment_memo_pdf(
         ["Total sqm", _fmt_sqm(prop.size_sqm)],
         ["Rooms", f"{prop.rooms:g}" if prop.rooms else "—"],
         ["Price / sqm", _fmt_huf_sqm(prop.price_per_sqm)],
+        ["Condition", classify_condition_tag(prop.condition)],
     ]
     core_table = Table(core_rows, colWidths=[5 * cm, 12 * cm])
     core_table.setStyle(
@@ -214,25 +240,20 @@ def generate_investment_memo_pdf(
     # --- Underwriting breakdown -----------------------------------------
     story.append(Paragraph("Underwriting Breakdown", styles["Heading2"]))
     district_baseline, discount_percent = _district_baseline_and_discount(prop, benchmark)
-    net_profit_eur = (
-        prop.underwriting_net_profit_huf / eur_huf_rate if prop.underwriting_net_profit_huf is not None else None
-    )
+    uw = underwriting or {}
+    net_profit_huf = uw.get("net_profit_huf")
+    deal_score = uw.get("deal_score")
+    net_profit_eur = net_profit_huf / eur_huf_rate if net_profit_huf is not None else None
 
     underwriting_rows = [
         ["District baseline median", _fmt_huf_sqm(district_baseline)],
         ["Discount to market", _fmt_pct(discount_percent)],
-        ["Estimated renovation budget", _fmt_huf(prop.underwriting_renovation_cost_huf)],
-        ["All-in investment", _fmt_huf(prop.underwriting_total_investment_huf)],
-        ["Projected post-renovation exit value", _fmt_huf(prop.underwriting_market_value_huf)],
-        [
-            "Projected net flip profit",
-            f"{_fmt_huf(prop.underwriting_net_profit_huf)}   ({_fmt_eur(net_profit_eur)})",
-        ],
-        ["Projected net ROI", _fmt_pct(prop.underwriting_flip_roi_percent)],
-        [
-            "Deal Score",
-            f"{prop.underwriting_deal_score}/100" if prop.underwriting_deal_score is not None else "—",
-        ],
+        ["Estimated renovation budget", _fmt_huf(uw.get("renovation_cost_huf"))],
+        ["All-in investment", _fmt_huf(uw.get("total_investment_huf"))],
+        ["Projected post-renovation exit value", _fmt_huf(uw.get("estimated_market_value_huf"))],
+        ["Projected net flip profit", f"{_fmt_huf(net_profit_huf)}   ({_fmt_eur(net_profit_eur)})"],
+        ["Projected net ROI", _fmt_pct(uw.get("flip_roi_percent"))],
+        ["Deal Score", f"{deal_score}/100" if deal_score is not None else "—"],
     ]
     underwriting_table = Table(underwriting_rows, colWidths=[7 * cm, 10 * cm])
     profit_row_index = 5
@@ -246,26 +267,37 @@ def generate_investment_memo_pdf(
         ("FONTNAME", (1, score_row_index), (1, score_row_index), "Helvetica-Bold"),
         ("FONTSIZE", (1, score_row_index), (1, score_row_index), 12),
     ]
-    if prop.underwriting_net_profit_huf is not None:
-        profit_color = colors.HexColor("#059669") if prop.underwriting_net_profit_huf >= 0 else colors.HexColor("#dc2626")
+    if net_profit_huf is not None:
+        profit_color = colors.HexColor("#059669") if net_profit_huf >= 0 else colors.HexColor("#dc2626")
         table_style.append(("TEXTCOLOR", (1, profit_row_index), (1, profit_row_index), profit_color))
         table_style.append(("FONTNAME", (1, profit_row_index), (1, profit_row_index), "Helvetica-Bold"))
+    if deal_score is not None:
+        # Deal Score badge: green/amber/red background chip, matching the
+        # frontend's DealScoreBadge thresholds (app/deal_score.py's score_band).
+        score_band = deal_score_module.score_band(deal_score)
+        band_colors = {
+            "high": colors.HexColor("#d1fae5"),
+            "fair": colors.HexColor("#fef3c7"),
+            "low": colors.HexColor("#fee2e2"),
+        }
+        table_style.append(("BACKGROUND", (1, score_row_index), (1, score_row_index), band_colors.get(score_band, colors.white)))
     underwriting_table.setStyle(TableStyle(table_style))
     story.append(underwriting_table)
 
-    if prop.underwriting_status and prop.underwriting_status.startswith("risk:"):
+    status = uw.get("status") or ""
+    if status.startswith("risk:"):
         story.append(Spacer(1, 4))
         story.append(
             Paragraph(
-                "⚠ Risk flagged: " + prop.underwriting_status.replace("risk:", "").replace(",", ", "),
+                "⚠ Risk flagged: " + status.replace("risk:", "").replace(",", ", "),
                 ParagraphStyle("Risk", parent=styles["Normal"], textColor=colors.HexColor("#dc2626"), fontSize=8.5),
             )
         )
-    if prop.underwriting_updated_at is not None:
+    if uw.get("updated_at"):
         story.append(Spacer(1, 4))
         story.append(
             Paragraph(
-                f"Underwriting as of last scan: {prop.underwriting_updated_at.strftime('%Y-%m-%d %H:%M UTC')}. "
+                f"Underwriting as of last scan: {uw['updated_at']}. "
                 "Uses a condition-based renovation estimate, 4% acquisition tax + 1.5% legal/closing, and a 3% "
                 "broker fee on exit.",
                 ParagraphStyle("Note", parent=styles["Normal"], fontSize=7, textColor=colors.grey),
@@ -275,7 +307,7 @@ def generate_investment_memo_pdf(
 
     # --- Investment thesis ------------------------------------------------
     story.append(Paragraph("Investment Thesis", styles["Heading2"]))
-    story.append(Paragraph(_investment_thesis(prop, district_baseline, discount_percent), styles["Normal"]))
+    story.append(Paragraph(_investment_thesis(prop, underwriting, district_baseline, discount_percent), styles["Normal"]))
 
     doc.build(story)
     return buffer.getvalue()

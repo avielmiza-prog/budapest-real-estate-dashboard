@@ -45,6 +45,7 @@ import { TIER_LABELS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { Currency, Deal, RenovationTier, RenovationTierName } from "@/lib/types";
 
+import { ConditionBadge } from "./condition-badge";
 import { DealScoreBadge } from "./deal-score-badge";
 import { FavoriteToggle, PipelineStatusSelect } from "./deal-actions";
 import { ImageLightbox } from "./image-lightbox";
@@ -583,6 +584,7 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
               <div className="flex items-start justify-between gap-2 pr-8">
                 <DialogTitle>{deal.title}</DialogTitle>
                 <div className="flex shrink-0 items-center gap-2">
+                  <ConditionBadge tag={deal.condition_tag} />
                   <DealScoreBadge score={deal.deal_score} band={deal.deal_score_band} />
                   <FavoriteToggle deal={deal} onUpdated={onDealUpdated} />
                 </div>

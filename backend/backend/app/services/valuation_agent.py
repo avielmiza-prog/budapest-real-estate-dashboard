@@ -6,8 +6,8 @@ Full renovation-tier tool (unchanged — it still powers the deal detail
 modal's slider and PDF exports, computed live on every request). This
 agent instead:
   - estimates renovation cost from the listing's own condition text
-    (keyword-matched — see _CONDITION_COST_RANGES_HUF_SQM below) rather
-    than a fixed preset the user picks,
+    (keyword-matched — see app.condition_classifier.classify_condition())
+    rather than a fixed preset the user picks,
   - runs once per scrape (scraper/pipeline.py calls validate_and_underwrite()
     from store_and_analyze()) and PERSISTS its verdict on the Property row
     (underwriting_* columns — see app/models.py), rather than recomputing
@@ -46,6 +46,15 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app import analyzer, crud, models
+from app.condition_classifier import (
+    CONDITION_AVERAGE,
+    CONDITION_NEEDS_RENOVATION,
+    CONDITION_NEW_CONSTRUCTION,
+    CONDITION_RENOVATED,
+    classify_condition,
+    classify_condition_tag,
+    estimate_renovation_cost_huf_per_sqm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,42 +76,6 @@ DEAL_SCORE_LIQUIDITY_WEIGHT = 0.20
 # other property's score toward the middle.
 _DISCOUNT_CLAMP_RANGE_PERCENT = (-20.0, 40.0)
 _ROI_CLAMP_RANGE_PERCENT = (-10.0, 30.0)
-
-# Condition-keyword (Hungarian, case-insensitive substring match) -> (low, high)
-# HUF/sqm renovation cost range; the midpoint is used as the point estimate.
-# Checked in this order (most-work-implied first), first match wins.
-_CONDITION_COST_RANGES_HUF_SQM = [
-    (
-        ("felújítandó", "felujitando", "lakhatatlan", "bontásra", "bontasra", "vályog", "romos"),
-        (180_000, 250_000),
-    ),  # unrenovated / needs full renovation
-    (
-        ("átlagos", "atlagos", "jó állapotú", "jo allapotu", "közepes", "kozepes",
-         "részben felújított", "reszben felujitott", "jó állapotban", "jo allapotban"),
-        (100_000, 150_000),
-    ),  # average / partially renovated
-    (
-        ("új építésű", "uj epitesu", "újépítésű", "ujepitesu", "felújított", "felujitott",
-         "turnkey", "kulcsrakész", "kulcsrakesz", "vadonatúj", "vadonatuj"),
-        (0, 0),
-    ),  # turnkey / already renovated / new-build
-]
-_DEFAULT_COST_RANGE_HUF_SQM = (100_000, 150_000)  # unknown/missing condition text: assume average, never assume free
-
-
-def _condition_cost_range_huf_sqm(condition_text: Optional[str]) -> tuple:
-    text = (condition_text or "").lower()
-    for keywords, cost_range in _CONDITION_COST_RANGES_HUF_SQM:
-        if any(keyword in text for keyword in keywords):
-            return cost_range
-    return _DEFAULT_COST_RANGE_HUF_SQM
-
-
-def estimate_renovation_cost_huf_per_sqm(condition_text: Optional[str]) -> float:
-    """Midpoint of the matched condition-keyword range — see module docstring/table above."""
-    low, high = _condition_cost_range_huf_sqm(condition_text)
-    return (low + high) / 2
-
 
 _BUDAPEST_CENTER = (47.4979, 19.0402)  # Deák Ferenc tér
 

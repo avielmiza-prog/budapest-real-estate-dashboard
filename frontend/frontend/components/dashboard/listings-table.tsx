@@ -14,6 +14,7 @@ import { getSourceListingUrl, isMockListingUrl } from "@/lib/deal-links";
 import { formatCurrency, formatRooms, formatSqm } from "@/lib/format";
 import type { Currency, Deal } from "@/lib/types";
 
+import { ConditionBadge } from "./condition-badge";
 import { DealScoreBadge } from "./deal-score-badge";
 import { FavoriteToggle, PipelineStatusSelect } from "./deal-actions";
 import { RoiBadge } from "./roi-badge";
@@ -37,6 +38,7 @@ export function ListingsTable({ deals, onSelectDeal, onDealUpdated, currency, eu
             <TableHead>District</TableHead>
             <TableHead>Size</TableHead>
             <TableHead>Rooms</TableHead>
+            <TableHead>Condition</TableHead>
             <TableHead>Price</TableHead>
             <TableHead>Price/sqm</TableHead>
             <TableHead>Net profit</TableHead>
@@ -59,6 +61,9 @@ export function ListingsTable({ deals, onSelectDeal, onDealUpdated, currency, eu
               <TableCell>{deal.district}</TableCell>
               <TableCell>{formatSqm(deal.size_sqm)}</TableCell>
               <TableCell>{formatRooms(deal.rooms)}</TableCell>
+              <TableCell>
+                <ConditionBadge tag={deal.condition_tag} />
+              </TableCell>
               <TableCell>{formatCurrency(deal.price_huf, currency, eurHufRate)}</TableCell>
               <TableCell>{formatCurrency(deal.price_per_sqm, currency, eurHufRate)}</TableCell>
               <TableCell

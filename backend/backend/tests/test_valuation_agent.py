@@ -25,25 +25,33 @@ init_db()
 
 
 # ---------------------------------------------------------------------------
-# estimate_renovation_cost_huf_per_sqm — condition-keyword classification
+# classify_condition / estimate_renovation_cost_huf_per_sqm / classify_condition_tag
 # ---------------------------------------------------------------------------
 
-def test_unrenovated_condition_gets_full_reno_range_midpoint():
-    assert va.estimate_renovation_cost_huf_per_sqm("Felújítandó, jó lehetőség") == 215_000  # midpoint of 180k-250k
+def test_unrenovated_condition_gets_needs_renovation_point_estimate():
+    assert va.estimate_renovation_cost_huf_per_sqm("Felújítandó, jó lehetőség") == 220_000
+    assert va.classify_condition_tag("Felújítandó, jó lehetőség") == va.CONDITION_NEEDS_RENOVATION
+    assert va.classify_condition_tag("Rossz állapotú, sürgősen eladó") == va.CONDITION_NEEDS_RENOVATION
 
 
-def test_average_condition_gets_partial_reno_range_midpoint():
-    assert va.estimate_renovation_cost_huf_per_sqm("Átlagos állapotú lakás") == 125_000  # midpoint of 100k-150k
+def test_average_condition_gets_average_point_estimate():
+    assert va.estimate_renovation_cost_huf_per_sqm("Átlagos állapotú lakás") == 120_000
+    assert va.classify_condition_tag("Átlagos állapotú lakás") == va.CONDITION_AVERAGE
+    assert va.classify_condition_tag("Lakható állapotban") == va.CONDITION_AVERAGE
 
 
-def test_turnkey_condition_gets_zero_reno_cost():
-    assert va.estimate_renovation_cost_huf_per_sqm("Új építésű, kulcsrakész") == 0
+def test_renovated_and_new_construction_get_zero_reno_cost_but_distinct_tags():
     assert va.estimate_renovation_cost_huf_per_sqm("Felújított lakás") == 0
+    assert va.classify_condition_tag("Felújított, újszerű lakás") == va.CONDITION_RENOVATED
+
+    assert va.estimate_renovation_cost_huf_per_sqm("Új építésű, kulcsrakész") == 0
+    assert va.classify_condition_tag("Új építésű társasházban") == va.CONDITION_NEW_CONSTRUCTION
 
 
 def test_missing_condition_defaults_to_average_not_free():
-    assert va.estimate_renovation_cost_huf_per_sqm(None) == 125_000
-    assert va.estimate_renovation_cost_huf_per_sqm("") == 125_000
+    assert va.estimate_renovation_cost_huf_per_sqm(None) == 120_000
+    assert va.estimate_renovation_cost_huf_per_sqm("") == 120_000
+    assert va.classify_condition_tag(None) == va.CONDITION_AVERAGE
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +102,7 @@ def test_no_benchmark_still_reports_cost_side():
         prop = _make_property(db, district="I")  # no benchmark seeded for district 1 in this test
         result = va.validate_and_underwrite(prop, db)
         assert result.status == "no_benchmark"
-        assert result.renovation_cost_huf == 50.0 * 125_000  # size_sqm * average-condition midpoint
+        assert result.renovation_cost_huf == 50.0 * 120_000  # size_sqm * average-condition point estimate
         assert result.total_investment_huf is not None
         assert result.estimated_market_value_huf is None
         assert result.deal_score is None
@@ -110,7 +118,7 @@ def test_full_underwriting_math_and_formulas():
 
         result = va.validate_and_underwrite(prop, db)
 
-        renovation_cost = 50.0 * 125_000  # 6,250,000
+        renovation_cost = 50.0 * 120_000  # 6,000,000
         acquisition_tax = 40_000_000.0 * 0.04  # 1,600,000
         legal_closing = 40_000_000.0 * 0.015  # 600,000
         total_investment = 40_000_000.0 + renovation_cost + acquisition_tax + legal_closing

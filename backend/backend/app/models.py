@@ -47,6 +47,12 @@ class Property(Base):
     pipeline_status = Column(String(30), nullable=False, default="new")
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
+    # Other portals' URLs for the same real-world listing, found by
+    # scraper/dedup.py (district + floor area ±2 sqm + price ±2% match) and
+    # merged onto this (the earliest-seen) row rather than kept as separate
+    # duplicate Property rows. Empty list, never None, when nothing merged.
+    duplicate_source_urls = Column(JSON, nullable=True, default=list)
+
     # Persisted verdict from app/services/valuation_agent.py, computed once
     # per scan (not recomputed live like app.analyzer/app.deal_score's
     # interactive tier tool) — see that module's docstring for why. All

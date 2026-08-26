@@ -77,6 +77,8 @@ def list_properties(
     districts: Optional[List[str]] = None,
     min_price_huf: Optional[float] = None,
     max_price_huf: Optional[float] = None,
+    min_price_per_sqm: Optional[float] = None,
+    max_price_per_sqm: Optional[float] = None,
     min_size_sqm: Optional[float] = None,
     max_size_sqm: Optional[float] = None,
     portals: Optional[List[str]] = None,
@@ -93,6 +95,10 @@ def list_properties(
         query = query.filter(models.Property.price_huf >= min_price_huf)
     if max_price_huf is not None:
         query = query.filter(models.Property.price_huf <= max_price_huf)
+    if min_price_per_sqm is not None:
+        query = query.filter(models.Property.price_per_sqm >= min_price_per_sqm)
+    if max_price_per_sqm is not None:
+        query = query.filter(models.Property.price_per_sqm <= max_price_per_sqm)
     if min_size_sqm is not None:
         query = query.filter(models.Property.size_sqm >= min_size_sqm)
     if max_size_sqm is not None:

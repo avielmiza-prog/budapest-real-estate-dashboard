@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, computed_field, field_validator
 
+from app.condition_classifier import classify_condition_tag
 from app.models import PIPELINE_STATUSES
 
 
@@ -92,11 +93,20 @@ class PropertyOut(PropertyBase):
     underwriting_confidence_tag: Optional[str] = None
     underwriting_updated_at: Optional[datetime.datetime] = None
 
+    # Other portals' URLs for the same real-world listing — see scraper/dedup.py.
+    duplicate_source_urls: Optional[List[str]] = None
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def source_url(self) -> Optional[str]:
         """Alias for `url` — the exact source-portal listing page this Property was scraped from."""
         return self.url
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def condition_tag(self) -> str:
+        """Standardized English condition tag ("Needs Renovation"/"Average"/"Renovated"/"New Construction") — see app.condition_classifier."""
+        return classify_condition_tag(self.condition)
 
 
 # ---------------------------------------------------------------------------

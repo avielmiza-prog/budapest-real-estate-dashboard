@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutGrid, MapPinned, RotateCcw, TableIcon } from "lucide-react";
+import { Download, LayoutGrid, MapPinned, RotateCcw, TableIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,11 +8,14 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RangeSlider, Slider } from "@/components/ui/slider";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getDealsExportCsvUrl } from "@/lib/api";
 import {
   PORTALS,
   PORTAL_LABELS,
   PRICE_FILTER_MAX_HUF,
   PRICE_FILTER_MIN_HUF,
+  PRICE_PER_SQM_FILTER_MAX_HUF,
+  PRICE_PER_SQM_FILTER_MIN_HUF,
   ROI_FILTER_MAX_PERCENT,
   ROI_FILTER_MIN_PERCENT,
   SIZE_FILTER_MAX_SQM,
@@ -60,6 +63,10 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
     filters.minPrice ?? PRICE_FILTER_MIN_HUF,
     filters.maxPrice ?? PRICE_FILTER_MAX_HUF,
   ];
+  const pricePerSqmRange: [number, number] = [
+    filters.minPricePerSqm ?? PRICE_PER_SQM_FILTER_MIN_HUF,
+    filters.maxPricePerSqm ?? PRICE_PER_SQM_FILTER_MAX_HUF,
+  ];
   const minRoi = filters.minRoi ?? ROI_FILTER_MIN_PERCENT;
 
   const togglePortal = (portal: string) => {
@@ -72,7 +79,7 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
 
   return (
     <div className="flex flex-col gap-5 rounded-lg border bg-card p-4 shadow-sm">
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
         <div className="flex flex-col gap-1.5">
           <Label>Districts</Label>
           <DistrictMultiSelect selected={filters.districts} onChange={(districts) => update({ districts })} />
@@ -122,6 +129,23 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
             step={1_000_000}
             value={priceRange}
             onValueChange={([minPrice, maxPrice]) => update({ minPrice, maxPrice })}
+            className="mt-1"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label>Price / sqm</Label>
+          <span className="text-xs text-muted-foreground">
+            {formatCurrency(pricePerSqmRange[0], "EUR", eurHufRate)}/sqm – {formatCurrency(pricePerSqmRange[1], "EUR", eurHufRate)}/sqm
+            <br />
+            ({formatCurrency(pricePerSqmRange[0], "HUF", eurHufRate)}/sqm – {formatCurrency(pricePerSqmRange[1], "HUF", eurHufRate)}/sqm)
+          </span>
+          <RangeSlider
+            min={PRICE_PER_SQM_FILTER_MIN_HUF}
+            max={PRICE_PER_SQM_FILTER_MAX_HUF}
+            step={50_000}
+            value={pricePerSqmRange}
+            onValueChange={([minPricePerSqm, maxPricePerSqm]) => update({ minPricePerSqm, maxPricePerSqm })}
             className="mt-1"
           />
         </div>
@@ -223,6 +247,13 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
           <Button variant="ghost" size="sm" onClick={() => onFiltersChange(EMPTY_FILTERS)} className="shrink-0">
             <RotateCcw />
             Reset
+          </Button>
+
+          <Button variant="outline" size="sm" className="shrink-0" asChild>
+            <a href={getDealsExportCsvUrl(filters, eurHufRate)} target="_blank" rel="noreferrer">
+              <Download />
+              Export CSV
+            </a>
           </Button>
 
           <Select value={filters.sortBy} onValueChange={(sortBy) => update({ sortBy: sortBy as SortOption })}>

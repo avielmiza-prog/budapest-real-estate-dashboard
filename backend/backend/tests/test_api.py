@@ -40,6 +40,11 @@ from app.main import app  # noqa: E402
 # already been read into this attribute by the time we get control back.
 access_control.ACCESS_PASSCODE = ""
 
+# A pytest run must never arm the real twice-daily background scanner (it'd
+# hit live portals from a test process) — same "flip the already-imported
+# module attribute" pattern as ACCESS_PASSCODE above.
+app_main.SCHEDULER_ENABLED = False
+
 init_db()
 client = TestClient(app)
 
@@ -317,6 +322,92 @@ def test_deals_sorting_and_unlimited_listings():
 
     client.delete(f"/properties/{cheap['id']}")
     client.delete(f"/properties/{expensive['id']}")
+
+
+def test_condition_tag_and_underwriting_never_null_when_benchmark_exists():
+    """
+    A property in a district with a benchmark on file (VII is auto-seeded —
+    see backend/seed_data.json) should get a non-null underwriting.deal_score/
+    flip_roi_percent/net_profit_huf even WITHOUT ever calling POST
+    /properties/{id}/underwrite — backfilled from the live analyzer readout,
+    per app/dashboard.py's has_underwriting fallback.
+    """
+    created = client.post(
+        "/properties",
+        json={
+            **_PROPERTY_PAYLOAD,
+            "title": "Fallback underwriting test flat",
+            "url": "https://example.test/listing/fallback-underwriting",
+            "condition": "Felújítandó, sürgős eladás",
+        },
+    )
+    assert created.status_code == 201, created.text
+    property_id = created.json()["id"]
+
+    deals = client.get("/deals").json()
+    deal = next(d for d in deals if d["id"] == property_id)
+
+    assert deal["condition_tag"] == "Needs Renovation"
+    assert deal["duplicate_source_urls"] == []
+    assert deal["underwriting"] is not None
+    assert deal["underwriting"]["deal_score"] is not None
+    assert deal["underwriting"]["flip_roi_percent"] is not None
+    assert deal["underwriting"]["net_profit_huf"] is not None
+    # Not actually persisted yet (no scan/underwrite call happened) — status/
+    # updated_at should honestly reflect that, even though the numbers above
+    # are filled in live.
+    assert deal["underwriting"]["updated_at"] is None
+
+    client.delete(f"/properties/{property_id}")
+
+
+def test_price_per_sqm_filter():
+    created = client.post(
+        "/properties",
+        json={
+            **_PROPERTY_PAYLOAD,
+            "title": "Price/sqm filter test flat",
+            "url": "https://example.test/listing/price-per-sqm-filter",
+            "price_huf": 100_000_000.0,  # 100M / 55 sqm ~= 1,818,182 HUF/sqm
+        },
+    )
+    assert created.status_code == 201, created.text
+    property_id = created.json()["id"]
+
+    matches = client.get("/deals", params={"min_price_per_sqm": 1_800_000, "max_price_per_sqm": 1_900_000}).json()
+    assert any(d["id"] == property_id for d in matches)
+
+    excluded = client.get("/deals", params={"max_price_per_sqm": 1_000_000}).json()
+    assert all(d["id"] != property_id for d in excluded)
+
+    client.delete(f"/properties/{property_id}")
+
+
+def test_deals_csv_export():
+    created = client.post(
+        "/properties",
+        json={
+            **_PROPERTY_PAYLOAD,
+            "title": "CSV export test flat",
+            "url": "https://example.test/listing/csv-export",
+        },
+    )
+    assert created.status_code == 201, created.text
+    property_id = created.json()["id"]
+
+    response = client.get("/deals/export.csv")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+
+    body = response.text
+    lines = body.strip().splitlines()
+    header = lines[0].split(",")
+    assert "underwriting_deal_score" in header
+    assert "condition_tag" in header
+    assert any("CSV export test flat" in line for line in lines[1:])
+
+    client.delete(f"/properties/{property_id}")
 
 
 # ---------------------------------------------------------------------------
