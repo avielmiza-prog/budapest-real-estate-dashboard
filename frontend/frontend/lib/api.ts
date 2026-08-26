@@ -6,19 +6,14 @@ import type { DashboardStats, Deal, DealFilters, DistrictBenchmark, FxRate, Pipe
 // that one. Both are inlined at build time by Next.js — set them in your
 // deployment platform's env config before building, not after.
 //
-// With neither set, the fallback depends on NODE_ENV (which Next.js/Vercel
-// set automatically — "production" for `next build`, "development" for
-// `next dev`): a production build falls back to the deployed Render
-// backend rather than localhost, since a prod build silently pointing at
-// someone's local machine is a worse failure mode than being explicit here;
-// local dev keeps falling back to localhost:8000 so it never accidentally
-// talks to (and mutates data on) the live production backend instead.
-export const PRODUCTION_API_FALLBACK = "https://budapest-real-estate-dashboard.onrender.com";
-const DEV_API_FALLBACK = "http://localhost:8000";
+// With neither set, this falls back to the deployed Render backend
+// unconditionally — including local `next dev`, which then talks to (and
+// can mutate data on) the live production backend unless you export
+// NEXT_PUBLIC_API_URL=http://localhost:8000 yourself for local work.
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ??
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  (process.env.NODE_ENV === "production" ? PRODUCTION_API_FALLBACK : DEV_API_FALLBACK);
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  "https://budapest-real-estate-dashboard.onrender.com";
 
 export class ApiError extends Error {
   status: number;
