@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 from app import access_control, analyzer, crud, dashboard, deal_score, fx_rate, investment_memo, models, schemas, scraper_jobs, seed, spec_sheet
 from app.database import SessionLocal, get_db, init_db
+from app.services import valuation_agent
 
 def _parse_districts(district: Optional[str]) -> Optional[List[str]]:
     """
@@ -289,6 +290,22 @@ def analyze_property_endpoint(
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    return result.to_dict()
+
+
+@app.post("/properties/{property_id}/underwrite", tags=["properties"])
+def underwrite_property_endpoint(property_id: int, db: Session = Depends(get_db)):
+    """
+    Manually (re-)run the automated underwriting agent (app/services/
+    valuation_agent.py) for one property and persist the result — normally
+    this runs automatically at the end of every scrape (see
+    scraper/pipeline.py), so this is for backfilling a property that
+    predates the feature, or refreshing one after a district-benchmark edit.
+    """
+    prop = crud.get_property(db, property_id)
+    if prop is None:
+        raise HTTPException(status_code=404, detail=f"Property {property_id} not found")
+    result = valuation_agent.validate_and_underwrite_and_persist(db, property_id)
     return result.to_dict()
 
 

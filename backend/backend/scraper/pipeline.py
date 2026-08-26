@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from app import analyzer, crud, schemas
+from app.services import valuation_agent
 from app.database import SessionLocal, init_db
 from scraper import geocode, playwright_runtime, robots
 from scraper.agent import human_behavior
@@ -243,6 +244,13 @@ def store_and_analyze(raw: RawListing, portal_name: str, url: str, eur_huf_rate:
             # Missing/unparseable district benchmark shouldn't block storing the listing itself.
             analysis_error = str(e)
             logger.info("No analysis for property %d (%s): %s", prop.id, url, e)
+
+        # Automated underwriting verification agent — see app/services/valuation_agent.py.
+        # Best-effort: a bug/edge-case here must never lose an otherwise-good scrape.
+        try:
+            valuation_agent.validate_and_underwrite_and_persist(db, prop.id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Underwriting agent failed for property %d (%s): %s", prop.id, url, e)
 
         return ScrapeResult(
             url=url, stored=True, property_id=prop.id, analysis=analysis_dict, error=analysis_error

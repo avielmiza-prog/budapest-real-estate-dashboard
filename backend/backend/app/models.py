@@ -47,6 +47,22 @@ class Property(Base):
     pipeline_status = Column(String(30), nullable=False, default="new")
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
+    # Persisted verdict from app/services/valuation_agent.py, computed once
+    # per scan (not recomputed live like app.analyzer/app.deal_score's
+    # interactive tier tool) — see that module's docstring for why. All
+    # nullable: unset until a scan has actually run validate_and_underwrite()
+    # against this row (e.g. a property added by hand via POST /properties).
+    underwriting_market_value_huf = Column(Float, nullable=True)  # projected turnkey exit price
+    underwriting_renovation_cost_huf = Column(Float, nullable=True)
+    underwriting_total_investment_huf = Column(Float, nullable=True)
+    underwriting_net_profit_huf = Column(Float, nullable=True)
+    underwriting_flip_roi_percent = Column(Float, nullable=True)
+    underwriting_rental_yield_percent = Column(Float, nullable=True)
+    underwriting_deal_score = Column(Integer, nullable=True)  # 1-100, this agent's own score — see its docstring for why it's distinct from app.deal_score
+    underwriting_status = Column(String(100), nullable=True)  # "validated" | "risk:overpriced" | "risk:below_hurdle_roi" | "risk:overpriced,below_hurdle_roi" | "no_benchmark" | "insufficient_data"
+    underwriting_confidence_tag = Column(String(50), nullable=True)  # "High Potential Flip" | "Buy & Hold Yield" | None
+    underwriting_updated_at = Column(DateTime, nullable=True)  # when the above was last computed — deliberately surfaced so it's never mistaken for a live number
+
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<Property id={self.id} title={self.title!r} district={self.district!r}>"
 

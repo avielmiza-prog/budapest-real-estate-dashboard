@@ -55,6 +55,25 @@ export const PIPELINE_STATUS_LABELS: Record<PipelineStatus, string> = {
 
 export type DealScoreBand = "high" | "fair" | "low";
 
+export type UnderwritingConfidenceTag = "High Potential Flip" | "Buy & Hold Yield";
+
+// Persisted verdict from the backend's automated underwriting agent
+// (app/services/valuation_agent.py) — computed once per scan, not live like
+// `analysis`/`deal_score` above. null until at least one scan (or a manual
+// POST /properties/{id}/underwrite) has processed this listing.
+export interface Underwriting {
+  estimated_market_value_huf: number | null;
+  renovation_cost_huf: number | null;
+  total_investment_huf: number | null;
+  net_profit_huf: number | null;
+  flip_roi_percent: number | null;
+  rental_yield_percent: number | null;
+  deal_score: number | null;
+  status: string | null; // "validated" | "risk:overpriced" | "risk:below_hurdle_roi" | "risk:overpriced,below_hurdle_roi" | "no_benchmark" | "insufficient_data"
+  confidence_tag: UnderwritingConfidenceTag | null;
+  updated_at: string | null;
+}
+
 export interface Deal {
   id: number;
   title: string;
@@ -81,6 +100,7 @@ export interface Deal {
   discount_percent: number | null;
   deal_score: number | null;
   deal_score_band: DealScoreBand | null;
+  underwriting: Underwriting | null;
 }
 
 export interface TopUndervaluedDeal {

@@ -227,11 +227,27 @@ def test_property_and_deal_lifecycle():
     assert analysis.status_code == 200
     assert "tiers" in analysis.json()
 
+    # automated underwriting agent (app/services/valuation_agent.py) — not run
+    # automatically on a manual POST /properties (only on a real scrape), so
+    # trigger it explicitly here.
+    underwritten = client.post(f"/properties/{property_id}/underwrite")
+    assert underwritten.status_code == 200, underwritten.text
+    underwriting_result = underwritten.json()
+    assert underwriting_result["deal_score"] is not None
+    assert underwriting_result["status"] is not None
+    assert client.post("/properties/9999999/underwrite").status_code == 404
+
+    fetched_after_underwrite = client.get(f"/properties/{property_id}").json()
+    assert fetched_after_underwrite["underwriting_deal_score"] == underwriting_result["deal_score"]
+    assert fetched_after_underwrite["underwriting_updated_at"] is not None
+
     deals = client.get("/deals").json()
     deal = next((d for d in deals if d["id"] == property_id), None)
     assert deal is not None
     assert deal["deal_score"] is not None
     assert deal["analysis"] is not None
+    assert deal["underwriting"] is not None
+    assert deal["underwriting"]["deal_score"] == underwriting_result["deal_score"]
 
     filtered = client.get("/deals", params={"district": "VII", "pipeline_status": "reviewing"}).json()
     assert any(d["id"] == property_id for d in filtered)

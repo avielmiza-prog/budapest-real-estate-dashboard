@@ -1,7 +1,18 @@
 "use client";
 
 import Image from "next/image";
-import { ChevronLeft, ChevronRight, Expand, ExternalLink, FileText, ImageOff, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Expand,
+  ExternalLink,
+  FileText,
+  ImageOff,
+  ShieldCheck,
+  Sparkles,
+  Wrench,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +40,7 @@ import {
 import { getInvestmentMemoUrl, getSpecSheetUrl } from "@/lib/api";
 import { getSourceListingUrl, isMockListingUrl } from "@/lib/deal-links";
 import { computeCustomTier } from "@/lib/financial-calc";
-import { formatCurrency, formatPercent, formatRooms, formatSqm } from "@/lib/format";
+import { formatCurrency, formatDate, formatEur, formatHuf, formatPercent, formatRooms, formatSqm } from "@/lib/format";
 import { TIER_LABELS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { Currency, Deal, RenovationTier, RenovationTierName } from "@/lib/types";
@@ -444,6 +455,114 @@ function FinancialBreakdownSection({
   );
 }
 
+function AutomatedUnderwritingSection({ deal, currency, eurHufRate }: { deal: Deal; currency: Currency; eurHufRate: number }) {
+  const uw = deal.underwriting;
+  if (!uw) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Not yet underwritten by the automated agent — this runs automatically on the next scan, or trigger it
+        manually via <code>POST /properties/{deal.id}/underwrite</code>.
+      </p>
+    );
+  }
+
+  const isRisk = uw.status?.startsWith("risk:") ?? false;
+  const riskReasons = isRisk ? uw.status!.replace("risk:", "").split(",") : [];
+  const riskLabels: Record<string, string> = {
+    overpriced: "Asking price is above the district's turnkey median",
+    below_hurdle_roi: "Projected flip ROI is below the 12% minimum hurdle rate",
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {uw.confidence_tag === "High Potential Flip" && (
+          <Badge variant="success" className="gap-1">
+            <Sparkles className="h-3 w-3" />
+            High Potential Flip
+          </Badge>
+        )}
+        {uw.confidence_tag === "Buy & Hold Yield" && (
+          <Badge variant="default" className="gap-1">
+            <ShieldCheck className="h-3 w-3" />
+            Buy &amp; Hold Yield
+          </Badge>
+        )}
+        {!isRisk && uw.status === "validated" && (
+          <Badge variant="outline" className="gap-1 text-emerald-600">
+            <ShieldCheck className="h-3 w-3" />
+            Validated
+          </Badge>
+        )}
+        <Badge variant="secondary" className="gap-1">
+          <Wrench className="h-3 w-3" />
+          Est. renovation: {formatCurrency(uw.renovation_cost_huf, currency, eurHufRate)}
+        </Badge>
+      </div>
+
+      {isRisk && (
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+          <div className="space-y-0.5">
+            {riskReasons.map((reason) => (
+              <p key={reason} className="text-destructive">
+                {riskLabels[reason] ?? reason}
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-4 rounded-lg border p-4 sm:grid-cols-3">
+        <div>
+          <p className="text-xs text-muted-foreground">Net Profit (HUF / EUR)</p>
+          <p
+            className={cn(
+              "text-lg font-bold",
+              (uw.net_profit_huf ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"
+            )}
+          >
+            {formatHuf(uw.net_profit_huf)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {uw.net_profit_huf !== null ? formatEur(uw.net_profit_huf / eurHufRate) : "—"}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Validated Flip ROI</p>
+          <RoiBadge roiPercent={uw.flip_roi_percent} />
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Agent Deal Score</p>
+          <p className="text-lg font-bold">{uw.deal_score !== null ? `${uw.deal_score}/100` : "—"}</p>
+        </div>
+      </div>
+
+      <dl className="space-y-1.5 text-sm">
+        <div className="flex justify-between">
+          <dt className="text-muted-foreground">Estimated market value (turnkey)</dt>
+          <dd className="font-medium">{formatCurrency(uw.estimated_market_value_huf, currency, eurHufRate)}</dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-muted-foreground">Total investment</dt>
+          <dd className="font-medium">{formatCurrency(uw.total_investment_huf, currency, eurHufRate)}</dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-muted-foreground">Rental yield</dt>
+          <dd className="font-medium">{formatPercent(uw.rental_yield_percent)}</dd>
+        </div>
+      </dl>
+
+      <p className="text-xs text-muted-foreground">
+        Automated verdict from the underwriting agent, computed at the last scan
+        {uw.updated_at ? ` (${formatDate(uw.updated_at)})` : ""} — a point-in-time read, not a live number. Uses a
+        condition-based renovation estimate, 4% acquisition tax + 1.5% legal/closing, and a 3% broker fee on
+        exit, independent of the interactive Light/Medium/Full tool above.
+      </p>
+    </div>
+  );
+}
+
 export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, eurHufRate }: DealDetailModalProps) {
   const sourceUrl = deal ? getSourceListingUrl(deal) : null;
   const isMock = deal ? isMockListingUrl(deal.source_url ?? deal.url) : false;
@@ -558,6 +677,13 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
                 customCostInput={customCostInput}
                 onCustomCostInputChange={setCustomCostInput}
               />
+            </div>
+
+            <Separator />
+
+            <div>
+              <h4 className="mb-3 text-sm font-semibold">Automated underwriting verdict</h4>
+              <AutomatedUnderwritingSection deal={deal} currency={currency} eurHufRate={eurHufRate} />
             </div>
           </>
         )}

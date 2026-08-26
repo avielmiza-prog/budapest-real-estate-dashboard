@@ -202,6 +202,23 @@ def list_deals(
                 "discount_percent": discount_percent,
                 "deal_score": score,
                 "deal_score_band": deal_score_module.score_band(score),
+                # Persisted verdict from app/services/valuation_agent.py — computed
+                # once per scan, not live like the fields above. See that module's
+                # docstring; underwriting_updated_at says how stale this is.
+                "underwriting": {
+                    "estimated_market_value_huf": prop.underwriting_market_value_huf,
+                    "renovation_cost_huf": prop.underwriting_renovation_cost_huf,
+                    "total_investment_huf": prop.underwriting_total_investment_huf,
+                    "net_profit_huf": prop.underwriting_net_profit_huf,
+                    "flip_roi_percent": prop.underwriting_flip_roi_percent,
+                    "rental_yield_percent": prop.underwriting_rental_yield_percent,
+                    "deal_score": prop.underwriting_deal_score,
+                    "status": prop.underwriting_status,
+                    "confidence_tag": prop.underwriting_confidence_tag,
+                    "updated_at": prop.underwriting_updated_at.isoformat() if prop.underwriting_updated_at else None,
+                }
+                if prop.underwriting_updated_at is not None
+                else None,
             }
         )
 

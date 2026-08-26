@@ -1,0 +1,198 @@
+"""
+Unit tests for app.services.valuation_agent — the automated underwriting
+verification agent (distinct from app.analyzer's interactive tier tool).
+
+Run with: python -m pytest tests/test_valuation_agent.py -q
+"""
+import os
+import sys
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+_tmp_db_dir = tempfile.mkdtemp(prefix="budapest_apartments_test_valuation_")
+os.environ["DATABASE_URL"] = f"sqlite:///{Path(_tmp_db_dir) / 'test.db'}"
+
+import pytest  # noqa: E402
+
+from app import crud, models, schemas  # noqa: E402
+from app.database import SessionLocal, init_db  # noqa: E402
+from app.services import valuation_agent as va  # noqa: E402
+
+init_db()
+
+
+# ---------------------------------------------------------------------------
+# estimate_renovation_cost_huf_per_sqm — condition-keyword classification
+# ---------------------------------------------------------------------------
+
+def test_unrenovated_condition_gets_full_reno_range_midpoint():
+    assert va.estimate_renovation_cost_huf_per_sqm("Felújítandó, jó lehetőség") == 215_000  # midpoint of 180k-250k
+
+
+def test_average_condition_gets_partial_reno_range_midpoint():
+    assert va.estimate_renovation_cost_huf_per_sqm("Átlagos állapotú lakás") == 125_000  # midpoint of 100k-150k
+
+
+def test_turnkey_condition_gets_zero_reno_cost():
+    assert va.estimate_renovation_cost_huf_per_sqm("Új építésű, kulcsrakész") == 0
+    assert va.estimate_renovation_cost_huf_per_sqm("Felújított lakás") == 0
+
+
+def test_missing_condition_defaults_to_average_not_free():
+    assert va.estimate_renovation_cost_huf_per_sqm(None) == 125_000
+    assert va.estimate_renovation_cost_huf_per_sqm("") == 125_000
+
+
+# ---------------------------------------------------------------------------
+# validate_and_underwrite — full pipeline against real DB rows
+# ---------------------------------------------------------------------------
+
+def _make_property(db, **overrides) -> models.Property:
+    payload = {
+        "title": "Test flat",
+        "district": "VII",
+        "size_sqm": 50.0,
+        "price_huf": 40_000_000.0,
+        "condition": "Átlagos állapotú",
+        "url": f"https://example.test/{overrides.get('title', 'listing')}-{id(overrides)}",
+        "portal": "jofogas",
+    }
+    payload.update(overrides)
+    prop = crud.create_property(db, schemas.PropertyCreate(**payload))
+    return prop
+
+
+def _make_benchmark(db, district_number=7, raw=800_000.0, renovated=1_500_000.0, rent=5000.0):
+    return crud.create_district_benchmark(
+        db,
+        schemas.DistrictBenchmarkCreate(
+            district_number=district_number,
+            avg_price_sqm_raw=raw,
+            avg_price_sqm_renovated=renovated,
+            avg_rent_huf_sqm=rent,
+        ),
+    )
+
+
+def test_insufficient_data_when_missing_size_or_price():
+    db = SessionLocal()
+    try:
+        prop = SimpleNamespace(size_sqm=None, price_huf=40_000_000.0, condition=None, district="VII")
+        result = va.validate_and_underwrite(prop, db)
+        assert result.status == "insufficient_data"
+        assert result.deal_score is None
+    finally:
+        db.close()
+
+
+def test_no_benchmark_still_reports_cost_side():
+    db = SessionLocal()
+    try:
+        prop = _make_property(db, district="I")  # no benchmark seeded for district 1 in this test
+        result = va.validate_and_underwrite(prop, db)
+        assert result.status == "no_benchmark"
+        assert result.renovation_cost_huf == 50.0 * 125_000  # size_sqm * average-condition midpoint
+        assert result.total_investment_huf is not None
+        assert result.estimated_market_value_huf is None
+        assert result.deal_score is None
+    finally:
+        db.close()
+
+
+def test_full_underwriting_math_and_formulas():
+    db = SessionLocal()
+    try:
+        _make_benchmark(db, district_number=7, renovated=1_500_000.0, rent=5000.0)
+        prop = _make_property(db, district="VII", size_sqm=50.0, price_huf=40_000_000.0, condition="Átlagos állapotú")
+
+        result = va.validate_and_underwrite(prop, db)
+
+        renovation_cost = 50.0 * 125_000  # 6,250,000
+        acquisition_tax = 40_000_000.0 * 0.04  # 1,600,000
+        legal_closing = 40_000_000.0 * 0.015  # 600,000
+        total_investment = 40_000_000.0 + renovation_cost + acquisition_tax + legal_closing
+        assert result.renovation_cost_huf == pytest.approx(renovation_cost)
+        assert result.total_investment_huf == pytest.approx(total_investment)
+
+        exit_price = 50.0 * 1_500_000.0  # 75,000,000
+        broker_fee = exit_price * 0.03
+        net_profit = exit_price - total_investment - broker_fee
+        assert result.estimated_market_value_huf == pytest.approx(exit_price)
+        assert result.net_profit_huf == pytest.approx(net_profit)
+
+        expected_roi = net_profit / total_investment * 100
+        assert result.flip_roi_percent == pytest.approx(expected_roi, abs=0.01)
+
+        annual_rent = 5000.0 * 50.0 * 12
+        expected_yield = annual_rent / total_investment * 100
+        assert result.rental_yield_percent == pytest.approx(expected_yield, abs=0.01)
+
+        assert result.deal_score is not None and 0 <= result.deal_score <= 100
+        # asking price/sqm (800,000) is well below the district's turnkey median (1,500,000) -> not overpriced
+        assert "overpriced" not in result.status
+    finally:
+        db.close()
+
+
+def test_overpriced_and_below_hurdle_risk_flags():
+    db = SessionLocal()
+    try:
+        _make_benchmark(db, district_number=8, renovated=1_000_000.0, rent=3000.0)
+        # asking price/sqm (1,600,000) is above the district's turnkey median (1,000,000) -> overpriced,
+        # and this math also nets a negative/low ROI -> below_hurdle_roi too
+        prop = _make_property(db, district="VIII", size_sqm=50.0, price_huf=80_000_000.0, condition="Felújítandó")
+
+        result = va.validate_and_underwrite(prop, db)
+        assert "overpriced" in result.status
+        assert "below_hurdle_roi" in result.status
+        assert result.confidence_tag is None
+    finally:
+        db.close()
+
+
+def test_high_roi_gets_high_potential_flip_tag():
+    db = SessionLocal()
+    try:
+        _make_benchmark(db, district_number=9, renovated=2_000_000.0, rent=1000.0)
+        # deeply discounted vs. benchmark, cheap partial reno -> big margin -> high ROI
+        prop = _make_property(db, district="IX", size_sqm=50.0, price_huf=20_000_000.0, condition="Átlagos állapotú")
+
+        result = va.validate_and_underwrite(prop, db)
+        assert result.flip_roi_percent >= va.HIGH_POTENTIAL_FLIP_ROI_PERCENT
+        assert result.confidence_tag == "High Potential Flip"
+    finally:
+        db.close()
+
+
+def test_persist_writes_all_fields_and_updated_at():
+    db = SessionLocal()
+    try:
+        _make_benchmark(db, district_number=10, renovated=900_000.0, rent=4000.0)
+        prop = _make_property(db, district="X", size_sqm=40.0, price_huf=25_000_000.0)
+
+        assert prop.underwriting_updated_at is None
+        result = va.validate_and_underwrite_and_persist(db, prop.id)
+        assert result is not None
+
+        refreshed = crud.get_property(db, prop.id)
+        assert refreshed.underwriting_deal_score == result.deal_score
+        assert refreshed.underwriting_flip_roi_percent == result.flip_roi_percent
+        assert refreshed.underwriting_status == result.status
+        assert refreshed.underwriting_updated_at is not None
+    finally:
+        db.close()
+
+
+def test_persist_returns_none_for_missing_property():
+    db = SessionLocal()
+    try:
+        assert va.validate_and_underwrite_and_persist(db, 9_999_999) is None
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-q"]))

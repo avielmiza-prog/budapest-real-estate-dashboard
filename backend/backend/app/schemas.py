@@ -79,6 +79,19 @@ class PropertyOut(PropertyBase):
     id: int
     created_at: datetime.datetime
 
+    # Read-only — set by app/services/valuation_agent.py, never by a client.
+    # Not present on PropertyCreate/PropertyUpdate above, deliberately.
+    underwriting_market_value_huf: Optional[float] = None
+    underwriting_renovation_cost_huf: Optional[float] = None
+    underwriting_total_investment_huf: Optional[float] = None
+    underwriting_net_profit_huf: Optional[float] = None
+    underwriting_flip_roi_percent: Optional[float] = None
+    underwriting_rental_yield_percent: Optional[float] = None
+    underwriting_deal_score: Optional[int] = None
+    underwriting_status: Optional[str] = None
+    underwriting_confidence_tag: Optional[str] = None
+    underwriting_updated_at: Optional[datetime.datetime] = None
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def source_url(self) -> Optional[str]:
