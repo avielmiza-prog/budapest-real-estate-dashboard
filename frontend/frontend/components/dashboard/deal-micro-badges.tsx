@@ -6,6 +6,11 @@ import type { Deal } from "@/lib/types";
 // 2-4% net in this dataset, so 5%+ is a genuine standout, not the median.
 const HIGH_YIELD_NET_PERCENT = 5;
 
+// ROI badge tiers — same roi_percent already shown by RoiBadge next to these
+// (deal.best_tier), so the two never disagree about which number is "the ROI".
+const HIGH_ROI_PERCENT = 20;
+const PRIME_FLIP_MIN_PERCENT = 15;
+
 /** Small, glanceable signals shared by every card layout (grid/table/split). */
 export function DealMicroBadges({ deal, className }: { deal: Deal; className?: string }) {
   const belowMarket = deal.discount_percent !== null && deal.discount_percent > 0;
@@ -20,10 +25,24 @@ export function DealMicroBadges({ deal, className }: { deal: Deal; className?: s
   const confidenceTag = deal.underwriting?.confidence_tag ?? null;
   const isRisk = deal.underwriting?.status?.startsWith("risk:") ?? false;
 
-  if (!belowMarket && !highYield && !hasBalcony && !confidenceTag && !isRisk) return null;
+  const roiPercent = deal.best_tier?.roi_percent ?? null;
+  const isHighRoi = roiPercent !== null && roiPercent > HIGH_ROI_PERCENT;
+  const isPrimeFlip = roiPercent !== null && roiPercent >= PRIME_FLIP_MIN_PERCENT && roiPercent <= HIGH_ROI_PERCENT;
+
+  if (!belowMarket && !highYield && !hasBalcony && !confidenceTag && !isRisk && !isHighRoi && !isPrimeFlip) return null;
 
   return (
     <div className={className}>
+      {isHighRoi && (
+        <Badge variant="success" className="text-[10px]">
+          High ROI: &gt;20%
+        </Badge>
+      )}
+      {isPrimeFlip && (
+        <Badge variant="success" className="text-[10px]">
+          Prime Flip: 15-20%
+        </Badge>
+      )}
       {confidenceTag === "High Potential Flip" && (
         <Badge variant="success" className="text-[10px]">
           High Potential Flip

@@ -36,8 +36,9 @@ only automates portals that allow it, not portals that have said no.
 import logging
 from typing import Dict, List, Optional
 
-from app import analyzer
+from app import analyzer, models
 from app.database import SessionLocal, init_db
+from app.services import valuation_agent
 from scraper import playwright_runtime
 from scraper.dedup import dedup_properties
 from scraper.pipeline import ScrapeResult, run_scrape_with_browser, store_and_analyze, try_http_fetch
@@ -186,6 +187,22 @@ def run_agent(
     db = SessionLocal()
     try:
         deduplicated = dedup_properties(db)
+
+        # Underwriting is persisted per-listing during store_and_analyze() above
+        # (valuation_agent.validate_and_underwrite_and_persist), so by now every
+        # property this scan touched already has its flip ROI verdict on file.
+        scanned_ids = [r.property_id for r in results if r.stored and r.property_id is not None]
+        passed_hurdle = rejected_sub_hurdle = 0
+        if scanned_ids:
+            scanned_props = db.query(models.Property).filter(models.Property.id.in_(scanned_ids)).all()
+            for prop in scanned_props:
+                roi = prop.underwriting_flip_roi_percent
+                if roi is None:
+                    continue  # not yet underwritten (no benchmark) — not counted either way
+                if roi >= valuation_agent.MIN_HURDLE_ROI_PERCENT:
+                    passed_hurdle += 1
+                else:
+                    rejected_sub_hurdle += 1
     finally:
         db.close()
 
@@ -196,6 +213,13 @@ def run_agent(
         filtered_anomalies,
         deduplicated,
         live_deals_added,
+    )
+    logger.info(
+        "[FILTER LOG] Passed %.0f%%+ Hurdle: %d deals | Rejected Sub-%.0f%%: %d deals",
+        valuation_agent.MIN_HURDLE_ROI_PERCENT,
+        passed_hurdle,
+        valuation_agent.MIN_HURDLE_ROI_PERCENT,
+        rejected_sub_hurdle,
     )
 
     return results

@@ -138,11 +138,30 @@ export interface DashboardStats {
 
 // Mirrors app/dashboard.py's SORT_OPTIONS — kept in this exact order since
 // the sort dropdown renders options in this order.
-export type SortOption = "newest" | "price_desc" | "price_asc" | "score_desc" | "roi_desc" | "sqm_asc";
+export type SortOption = "newest" | "price_desc" | "price_asc" | "score_desc" | "roi_desc" | "sqm_asc" | "roi_score_desc";
 
-export const SORT_OPTIONS: SortOption[] = ["newest", "price_desc", "price_asc", "score_desc", "roi_desc", "sqm_asc"];
+export const SORT_OPTIONS: SortOption[] = [
+  "roi_score_desc",
+  "newest",
+  "price_desc",
+  "price_asc",
+  "score_desc",
+  "roi_desc",
+  "sqm_asc",
+];
+
+// Default sort: strict Net ROI (underwriting flip_roi_percent) descending,
+// Deal Score as the tiebreaker — surfaces the best underwritten deals first.
+export const DEFAULT_SORT: SortOption = "roi_score_desc";
+
+// Default minimum Net ROI filter — matches the backend's strict profitability
+// hurdle (app/services/valuation_agent.MIN_HURDLE_ROI_PERCENT). The backend
+// already enforces this hurdle server-side regardless of this client filter,
+// so this just keeps the UI's own slider in sync with what's actually shown.
+export const DEFAULT_MIN_ROI_PERCENT = 10;
 
 export const SORT_OPTION_LABELS: Record<SortOption, string> = {
+  roi_score_desc: "Highest ROI / Best Deal Score",
   newest: "Newest Added",
   price_desc: "Price: High to Low",
   price_asc: "Price: Low to High",
@@ -166,9 +185,13 @@ export interface DealFilters {
   sortBy: SortOption;
 }
 
+// Also doubles as "Clear filters" — clearing resets to the platform's
+// strict 10% Net ROI baseline, not an unfiltered view (the backend enforces
+// that hurdle server-side by default regardless, so this keeps the UI honest
+// about what's actually being shown).
 export const EMPTY_FILTERS: DealFilters = {
   districts: [],
-  minRoi: null,
+  minRoi: DEFAULT_MIN_ROI_PERCENT,
   minSize: null,
   maxSize: null,
   minPrice: null,
@@ -178,7 +201,7 @@ export const EMPTY_FILTERS: DealFilters = {
   portals: [],
   favoritesOnly: false,
   pipelineStatus: null,
-  sortBy: "newest",
+  sortBy: DEFAULT_SORT,
 };
 
 export type ViewMode = "table" | "card" | "split";

@@ -62,7 +62,7 @@ ACQUISITION_TAX_RATE = 0.04  # Hungarian property transfer tax ("illeték")
 LEGAL_CLOSING_RATE = 0.015  # legal/notary + closing costs
 BROKER_FEE_RATE = 0.03  # sales/broker commission, paid out of the projected exit price
 
-MIN_HURDLE_ROI_PERCENT = 12.0  # flip ROI below this -> "risk:below_hurdle_roi"
+MIN_HURDLE_ROI_PERCENT = 10.0  # flip ROI below this -> "risk:below_hurdle_roi"
 
 HIGH_POTENTIAL_FLIP_ROI_PERCENT = 20.0  # confidence tag threshold
 BUY_AND_HOLD_YIELD_PERCENT = 5.0  # confidence tag threshold

@@ -120,7 +120,9 @@ export function Dashboard() {
 
       {!isLoading && !error && deals.length === 0 && (
         <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          No listings match these filters yet.
+          {filters.minRoi !== null && filters.minRoi > 0
+            ? `No deals found meeting the minimum ${filters.minRoi}% Net ROI requirement in this selection.`
+            : "No listings match these filters yet."}
         </p>
       )}
 

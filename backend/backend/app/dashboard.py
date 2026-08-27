@@ -16,6 +16,22 @@ from sqlalchemy.orm import Session
 from app import analyzer, crud, deal_score as deal_score_module, models
 from app.condition_classifier import classify_condition_tag
 
+# Strict Net ROI hurdle applied by default — must match
+# app.services.valuation_agent.MIN_HURDLE_ROI_PERCENT (the same threshold the
+# underwriting agent uses to flag "risk:below_hurdle_roi"). Kept as a literal
+# rather than importing app.services.valuation_agent here: several tests
+# import app.dashboard/app.main before pinning their own throwaway
+# DATABASE_URL, and app.database's engine is created once at first import —
+# pulling in another module's import chain this early has repeatedly caused
+# tests to share a DB unintentionally. See test_api.py's module docstring.
+#
+# Only excludes properties that HAVE a persisted flip ROI below the hurdle —
+# a property with no underwriting verdict yet (flip_roi_percent=None) still
+# shows up, so a fresh scrape isn't hidden before its first underwriting
+# pass. Callers that want the pre-hurdle full market (e.g. an analyst
+# reviewing everything) can pass min_flip_roi=None explicitly.
+DEFAULT_MIN_FLIP_ROI_PERCENT = 10.0
+
 
 def _district_benchmark_or_none(db: Session, district: str) -> Optional[models.DistrictBenchmark]:
     try:
@@ -209,7 +225,12 @@ def compute_stats(db: Session, eur_huf_rate: float, top_n: int = 5) -> dict:
 # Sort keys, most-recently-used first. Each maps a deal dict to a sort key;
 # entries with a None underlying value always sort last, regardless of
 # direction, so "missing data" never masquerades as "worst" or "best".
-SORT_OPTIONS = ("newest", "price_desc", "price_asc", "score_desc", "roi_desc", "sqm_asc")
+SORT_OPTIONS = ("newest", "price_desc", "price_asc", "score_desc", "roi_desc", "sqm_asc", "roi_score_desc")
+
+# Default sort: highest persisted Net ROI first, Deal Score as the tiebreaker
+# for equal/missing ROI — surfaces the best underwritten opportunities first
+# instead of just the most-recently-scraped ones.
+DEFAULT_SORT = "roi_score_desc"
 
 
 def _sort_deals(deals: List[dict], sort_by: str) -> List[dict]:
@@ -227,6 +248,16 @@ def _sort_deals(deals: List[dict], sort_by: str) -> List[dict]:
                 -((d["best_tier"] or {}).get("roi_percent") or 0),
             ),
         )
+    if sort_by == "roi_score_desc":
+        return sorted(
+            deals,
+            key=lambda d: (
+                d["underwriting"] is None or d["underwriting"]["flip_roi_percent"] is None,
+                -((d["underwriting"] or {}).get("flip_roi_percent") or 0),
+                d["deal_score"] is None,
+                -(d["deal_score"] or 0),
+            ),
+        )
     if sort_by == "sqm_asc":
         return sorted(deals, key=lambda d: (d["price_per_sqm"] is None, d["price_per_sqm"] or 0))
     # "newest" (default / unrecognized) — created_at desc, matching the DB's own ordering.
@@ -238,6 +269,7 @@ def list_deals(
     district: Optional[str] = None,
     districts: Optional[List[str]] = None,
     min_roi: Optional[float] = None,
+    min_flip_roi: Optional[float] = DEFAULT_MIN_FLIP_ROI_PERCENT,
     min_size_sqm: Optional[float] = None,
     max_size_sqm: Optional[float] = None,
     min_price_huf: Optional[float] = None,
@@ -248,7 +280,7 @@ def list_deals(
     favorites_only: bool = False,
     pipeline_status: Optional[str] = None,
     eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE,
-    sort_by: str = "newest",
+    sort_by: str = DEFAULT_SORT,
     skip: int = 0,
     limit: Optional[int] = None,
 ) -> List[dict]:
@@ -256,10 +288,11 @@ def list_deals(
     Property rows (DB-level filtered by district/size/price/portal/favorite/
     pipeline status) enriched with their full renovation analysis and a
     0-100 Deal Score, then optionally filtered by min_roi (best tier's ROI%
-    >= min_roi), sorted by `sort_by` (see SORT_OPTIONS), and finally paged
-    with skip/limit. A property with no district benchmark yet gets
-    analysis=None and is excluded whenever min_roi is set, since there's
-    nothing to compare it against.
+    >= min_roi) and by min_flip_roi (the strict, persisted underwriting Net
+    ROI hurdle — see DEFAULT_MIN_FLIP_ROI_PERCENT), sorted by `sort_by` (see
+    SORT_OPTIONS), and finally paged with skip/limit. A property with no
+    district benchmark yet gets analysis=None and is excluded whenever
+    min_roi is set, since there's nothing to compare it against.
 
     Sorting and paging both happen in Python, after the full matching set is
     enriched — several sort keys (deal_score, ROI) only exist post-analysis,
@@ -298,6 +331,11 @@ def list_deals(
         # "insufficient_data"). See build_underwriting_dict()'s docstring for
         # the null-backfill rule.
         underwriting = build_underwriting_dict(prop, best_tier, score)
+
+        if min_flip_roi is not None and underwriting is not None:
+            flip_roi = underwriting["flip_roi_percent"]
+            if flip_roi is not None and flip_roi < min_flip_roi:
+                continue
 
         deals.append(
             {

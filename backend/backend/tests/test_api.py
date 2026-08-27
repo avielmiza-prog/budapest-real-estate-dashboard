@@ -305,19 +305,24 @@ def test_deals_sorting_and_unlimited_listings():
         },
     ).json()
 
-    price_desc_ids = [d["id"] for d in client.get("/deals", params={"sort": "price_desc"}).json()]
+    # min_flip_roi disabled (very low bar) — this test is about sort/paging,
+    # not the strict Net ROI hurdle, and these fixtures' arbitrary prices
+    # aren't meant to clear it.
+    no_hurdle = {"min_flip_roi": -1000}
+
+    price_desc_ids = [d["id"] for d in client.get("/deals", params={**no_hurdle, "sort": "price_desc"}).json()]
     assert price_desc_ids.index(expensive["id"]) < price_desc_ids.index(cheap["id"])
 
-    price_asc_ids = [d["id"] for d in client.get("/deals", params={"sort": "price_asc"}).json()]
+    price_asc_ids = [d["id"] for d in client.get("/deals", params={**no_hurdle, "sort": "price_asc"}).json()]
     assert price_asc_ids.index(cheap["id"]) < price_asc_ids.index(expensive["id"])
 
     # No `limit` -> every matching listing comes back, not a truncated default page.
-    unlimited = client.get("/deals").json()
+    unlimited = client.get("/deals", params=no_hurdle).json()
     assert len(unlimited) >= 2
     assert cheap["id"] in [d["id"] for d in unlimited]
     assert expensive["id"] in [d["id"] for d in unlimited]
 
-    limited = client.get("/deals", params={"limit": 1}).json()
+    limited = client.get("/deals", params={**no_hurdle, "limit": 1}).json()
     assert len(limited) == 1
 
     client.delete(f"/properties/{cheap['id']}")
@@ -374,7 +379,9 @@ def test_price_per_sqm_filter():
     assert created.status_code == 201, created.text
     property_id = created.json()["id"]
 
-    matches = client.get("/deals", params={"min_price_per_sqm": 1_800_000, "max_price_per_sqm": 1_900_000}).json()
+    matches = client.get(
+        "/deals", params={"min_flip_roi": -1000, "min_price_per_sqm": 1_800_000, "max_price_per_sqm": 1_900_000}
+    ).json()
     assert any(d["id"] == property_id for d in matches)
 
     excluded = client.get("/deals", params={"max_price_per_sqm": 1_000_000}).json()

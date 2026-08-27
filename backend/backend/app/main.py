@@ -493,6 +493,16 @@ def list_deals(
         default=None, description="Single district or comma-separated list, e.g. 'V,VI,VII'."
     ),
     min_roi: Optional[float] = Query(default=None, description="Minimum best-tier ROI %% required to be included."),
+    min_flip_roi: Optional[float] = Query(
+        default=dashboard.DEFAULT_MIN_FLIP_ROI_PERCENT,
+        description=(
+            "Strict Net ROI hurdle applied to the persisted underwriting flip ROI "
+            "(after renovation, 4%% acquisition tax, 1.5%% legal/closing, 3%% broker "
+            "fee). Defaults to the platform's minimum profitability bar. Pass a very "
+            "low number (or omit via a negative value) to see the full market including "
+            "sub-hurdle deals."
+        ),
+    ),
     min_size_sqm: Optional[float] = None,
     max_size_sqm: Optional[float] = None,
     min_price_huf: Optional[float] = None,
@@ -508,7 +518,7 @@ def list_deals(
     ),
     eur_huf_rate: float = Query(default=analyzer.DEFAULT_EUR_HUF_RATE, gt=0),
     sort: str = Query(
-        default="newest",
+        default=dashboard.DEFAULT_SORT,
         description=f"One of {dashboard.SORT_OPTIONS}. Unrecognized values fall back to 'newest'.",
     ),
     skip: int = 0,
@@ -518,10 +528,11 @@ def list_deals(
     """
     Properties (DB-filtered by district/size/price/portal/favorite/pipeline
     status) enriched with their full renovation analysis and Deal Score,
-    further filtered by min_roi (best tier) when given, sorted by `sort`.
-    This is the single endpoint the dashboard's table/card/split-map views
-    and detail modal all read from — each item already carries everything
-    the UI needs. Omitting `limit` returns every relevant listing.
+    further filtered by min_roi (best tier) and min_flip_roi (the strict
+    underwriting Net ROI hurdle) when given, sorted by `sort`. This is the
+    single endpoint the dashboard's table/card/split-map views and detail
+    modal all read from — each item already carries everything the UI
+    needs. Omitting `limit` returns every relevant listing.
     """
     if pipeline_status is not None and pipeline_status not in models.PIPELINE_STATUSES:
         raise HTTPException(
@@ -531,6 +542,7 @@ def list_deals(
         db,
         districts=_parse_districts(district),
         min_roi=min_roi,
+        min_flip_roi=min_flip_roi,
         min_size_sqm=min_size_sqm,
         max_size_sqm=max_size_sqm,
         min_price_huf=min_price_huf,
@@ -551,6 +563,7 @@ def list_deals(
 def export_deals_csv(
     district: Optional[str] = Query(default=None),
     min_roi: Optional[float] = Query(default=None),
+    min_flip_roi: Optional[float] = Query(default=dashboard.DEFAULT_MIN_FLIP_ROI_PERCENT),
     min_size_sqm: Optional[float] = None,
     max_size_sqm: Optional[float] = None,
     min_price_huf: Optional[float] = None,
@@ -561,7 +574,7 @@ def export_deals_csv(
     favorites_only: bool = False,
     pipeline_status: Optional[str] = Query(default=None),
     eur_huf_rate: float = Query(default=analyzer.DEFAULT_EUR_HUF_RATE, gt=0),
-    sort: str = Query(default="newest"),
+    sort: str = Query(default=dashboard.DEFAULT_SORT),
     db: Session = Depends(get_db),
 ):
     """
@@ -578,6 +591,7 @@ def export_deals_csv(
         db,
         districts=_parse_districts(district),
         min_roi=min_roi,
+        min_flip_roi=min_flip_roi,
         min_size_sqm=min_size_sqm,
         max_size_sqm=max_size_sqm,
         min_price_huf=min_price_huf,
