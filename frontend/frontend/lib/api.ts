@@ -93,7 +93,7 @@ async function postJson<T>(path: string, params: Record<string, string | number 
 }
 
 /** Kicks off the autonomous multi-portal ingestion agent server-side (a no-op if a scan is already running). */
-export function triggerScraperScan(maxListings = 30): Promise<ScraperStatus> {
+export function triggerScraperScan(maxListings = 150): Promise<ScraperStatus> {
   return postJson<ScraperStatus>("/api/scraper/trigger", { max_listings: maxListings });
 }
 
