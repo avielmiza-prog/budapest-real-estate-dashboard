@@ -20,6 +20,15 @@ dashboard figure. Re-scraping a listing (or re-running the underwriting
 pass) refreshes it; a district-benchmark edit alone does not, until the
 next scan touches that listing.
 
+The benchmark this agent reads (via crud.get_district_benchmark, below) is
+itself kept live by app/services/stats_service.py's
+update_district_benchmarks() — a statistical median computed from recently
+scraped listings in that district, falling back to the documented
+seed_data.json baseline only when too few live samples exist yet (see that
+module's docstring). This module doesn't call it directly; it just trusts
+whatever DistrictBenchmark.avg_price_sqm_renovated currently holds, same as
+before that function existed.
+
 Formulas (all in HUF unless noted):
   Renovation Cost      = size_sqm * condition-implied HUF/sqm estimate
   Total Investment     = Purchase Price + Renovation Cost

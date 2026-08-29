@@ -180,7 +180,7 @@ function BenchmarkComparison({ deal, currency, eurHufRate }: { deal: Deal; curre
       </div>
       <div className="space-y-1">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">District avg. (renovated)</span>
+          <span className="text-muted-foreground">District Median (Turnkey)</span>
           <span className="font-medium">{formatCurrency(benchmarkPerSqm, currency, eurHufRate)}/sqm</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -192,11 +192,28 @@ function BenchmarkComparison({ deal, currency, eurHufRate }: { deal: Deal; curre
       </div>
       {deltaPercent !== null && (
         <p className="text-sm">
-          Asking price is{" "}
+          Discount vs. District Median:{" "}
           <span className={cn("font-semibold", deltaPercent > 0 ? "text-emerald-600" : "text-red-600")}>
-            {formatPercent(Math.abs(deltaPercent))} {deltaPercent > 0 ? "below" : "above"}
+            {deltaPercent > 0 ? "-" : "+"}
+            {formatPercent(Math.abs(deltaPercent))}
           </span>{" "}
-          the district&apos;s renovated-condition benchmark.
+          ({deltaPercent > 0 ? "below" : "above"} the district&apos;s turnkey median).
+        </p>
+      )}
+      {analysis.district_median_sample_count !== null && analysis.district_median_source && (
+        <p className="text-xs text-muted-foreground">
+          {analysis.district_median_source === "live" ? (
+            <>
+              Live Database Samples Used: based on {analysis.district_median_sample_count} recent listing
+              {analysis.district_median_sample_count === 1 ? "" : "s"} in District {deal.district}.
+            </>
+          ) : (
+            <>
+              Documented baseline benchmark ({analysis.district_median_sample_count} live listing
+              {analysis.district_median_sample_count === 1 ? "" : "s"} on file — below the 10-sample minimum for a
+              live median).
+            </>
+          )}
         </p>
       )}
     </div>

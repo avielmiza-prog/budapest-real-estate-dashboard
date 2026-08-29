@@ -189,6 +189,12 @@ class PropertyAnalysis:
     usable_area_sqm: float = 0.0
     avg_rent_huf_sqm: Optional[float] = None
     tiers: List[RenovationTierResult] = field(default_factory=list)
+    # Transparency on avg_price_sqm_renovated_huf's origin — see
+    # app.services.stats_service.update_district_benchmarks(). None when the
+    # caller didn't supply it (e.g. analyze_property() called directly, off
+    # a hand-built number rather than a DB benchmark row).
+    district_median_sample_count: Optional[int] = None
+    district_median_source: Optional[str] = None  # "live" | "fallback" | None
 
     def to_dict(self) -> dict:
         return {
@@ -205,6 +211,8 @@ class PropertyAnalysis:
             "usable_area_sqm": round(self.usable_area_sqm, 2),
             "avg_rent_huf_sqm": self.avg_rent_huf_sqm,
             "tiers": [t.to_dict() for t in self.tiers],
+            "district_median_sample_count": self.district_median_sample_count,
+            "district_median_source": self.district_median_source,
         }
 
     def best_tier(self) -> Optional[RenovationTierResult]:
@@ -299,11 +307,17 @@ def analyze_property(
     balcony_sqm: Optional[float] = None,
     avg_rent_huf_sqm: Optional[float] = None,
     custom_cost_eur_per_sqm: Optional[float] = None,
+    district_median_sample_count: Optional[int] = None,
+    district_median_source: Optional[str] = None,
 ) -> PropertyAnalysis:
     """
     Run the full flip analysis for one property across the Light/Medium/Full
     renovation tiers, plus an optional "custom" tier when
     custom_cost_eur_per_sqm is given. All money in, money out.
+
+    district_median_sample_count/district_median_source are pass-through
+    metadata about avg_price_sqm_renovated_huf's origin (see
+    PropertyAnalysis) — purely informational, no effect on the math.
 
     Raises ValueError on invalid (negative) numeric inputs.
     """
@@ -372,6 +386,8 @@ def analyze_property(
         usable_area_sqm=usable_area_sqm,
         avg_rent_huf_sqm=avg_rent_huf_sqm,
         tiers=tier_results,
+        district_median_sample_count=district_median_sample_count,
+        district_median_source=district_median_source,
     )
 
 
@@ -427,6 +443,8 @@ def analyze_property_by_id(
         balcony_sqm=prop.balcony_sqm,
         avg_rent_huf_sqm=benchmark.avg_rent_huf_sqm,
         custom_cost_eur_per_sqm=custom_cost_eur_per_sqm,
+        district_median_sample_count=benchmark.sample_count_renovated,
+        district_median_source=benchmark.source_renovated,
     )
 
 

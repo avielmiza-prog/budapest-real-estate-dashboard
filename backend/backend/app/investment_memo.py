@@ -75,6 +75,24 @@ def _district_baseline_and_discount(
     return median, round(discount, 2)
 
 
+def _benchmark_provenance_line(benchmark: Optional[models.DistrictBenchmark]) -> Optional[str]:
+    """
+    "Based on N recent listings in District X" / documented-baseline note —
+    see app/services/stats_service.py's live-vs-fallback median computation.
+    None when no benchmark row exists at all (nothing to attribute).
+    """
+    if benchmark is None:
+        return None
+    count = benchmark.sample_count_renovated
+    source = benchmark.source_renovated
+    if source == "live" and count is not None:
+        return f"District median based on {count} recent live database listing{'s' if count != 1 else ''}."
+    if source == "fallback":
+        basis = f" ({count} live listing{'s' if count != 1 else ''} on file — below the 10-sample minimum)" if count else ""
+        return f"District median uses the documented baseline benchmark{basis}, not a live-computed figure."
+    return None
+
+
 def _investment_thesis(
     prop: models.Property,
     underwriting: Optional[dict],
@@ -291,6 +309,15 @@ def generate_investment_memo_pdf(
             Paragraph(
                 "⚠ Risk flagged: " + status.replace("risk:", "").replace(",", ", "),
                 ParagraphStyle("Risk", parent=styles["Normal"], textColor=colors.HexColor("#dc2626"), fontSize=8.5),
+            )
+        )
+    provenance_line = _benchmark_provenance_line(benchmark)
+    if provenance_line:
+        story.append(Spacer(1, 4))
+        story.append(
+            Paragraph(
+                provenance_line,
+                ParagraphStyle("Provenance", parent=styles["Normal"], fontSize=7.5, textColor=colors.grey),
             )
         )
     if uw.get("updated_at"):

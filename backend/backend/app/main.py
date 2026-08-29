@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 from app import access_control, analyzer, crud, dashboard, fx_rate, investment_memo, models, schemas, scraper_jobs, seed, spec_sheet
 from app.database import SessionLocal, get_db, init_db
-from app.services import valuation_agent
+from app.services import stats_service, valuation_agent
 
 # Twice-daily automated scan cycle (10:00 + 18:00 Europe/Budapest) — see
 # on_startup() below and POST /api/scan/trigger for a manual/webhook-driven
@@ -121,6 +121,14 @@ async def on_startup() -> None:
     db = SessionLocal()
     try:
         seed.seed_district_benchmarks_if_empty(db)
+        # Best-effort: refresh benchmarks from whatever live listings already
+        # exist (e.g. a redeploy against an existing DB) so they aren't stuck
+        # on the static seed snapshot until the next scheduled scan touches
+        # them. See app/services/stats_service.py.
+        try:
+            stats_service.update_district_benchmarks(db)
+        except Exception:  # noqa: BLE001 - must never block startup
+            logger.exception("update_district_benchmarks failed during startup")
     finally:
         db.close()
 
@@ -662,6 +670,22 @@ def upsert_district_benchmark(
     district_number: int, payload: schemas.DistrictBenchmarkUpdate, db: Session = Depends(get_db)
 ):
     return crud.upsert_district_benchmark(db, district_number, payload)
+
+
+@app.post(
+    "/district-benchmarks/recompute",
+    tags=["district-benchmarks"],
+)
+def recompute_district_benchmarks(db: Session = Depends(get_db)):
+    """
+    On-demand refresh of every district's live median price/sqm from
+    currently stored listings — see app/services/stats_service.py. The
+    twice-daily scan cycle and app startup already call this automatically;
+    this route is for triggering it manually (e.g. right after a bulk
+    import) without waiting for either.
+    """
+    districts_updated = stats_service.update_district_benchmarks(db)
+    return {"districts_updated": districts_updated}
 
 
 @app.delete("/district-benchmarks/{district_number}", status_code=204, tags=["district-benchmarks"])

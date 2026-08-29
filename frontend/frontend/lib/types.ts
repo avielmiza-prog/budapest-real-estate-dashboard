@@ -33,6 +33,10 @@ export interface PropertyAnalysis {
   usable_area_sqm: number;
   avg_rent_huf_sqm: number | null;
   tiers: RenovationTier[];
+  // Transparency on avg_price_sqm_renovated_huf's origin — see
+  // backend/app/services/stats_service.py's live-vs-fallback median computation.
+  district_median_sample_count: number | null;
+  district_median_source: "live" | "fallback" | null;
 }
 
 export type PipelineStatus = "new" | "reviewing" | "tour_scheduled" | "offer_sent" | "archived";
@@ -214,6 +218,11 @@ export interface DistrictBenchmark {
   centroid_lat: number | null;
   centroid_lng: number | null;
   updated_at: string;
+  // Set by backend/app/services/stats_service.py's update_district_benchmarks().
+  sample_count_raw: number | null;
+  sample_count_renovated: number | null;
+  source_raw: "live" | "fallback" | null;
+  source_renovated: "live" | "fallback" | null;
 }
 
 export interface ScraperStatus {

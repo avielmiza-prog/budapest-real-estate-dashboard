@@ -136,6 +136,15 @@ class DistrictBenchmarkOut(DistrictBenchmarkBase):
     district_number: int
     updated_at: datetime.datetime
 
+    # Read-only — set by app/services/stats_service.py's
+    # update_district_benchmarks(), never by a client. Not present on
+    # DistrictBenchmarkCreate/Update above, deliberately (same pattern as
+    # PropertyOut's underwriting_* fields).
+    sample_count_raw: Optional[int] = None
+    sample_count_renovated: Optional[int] = None
+    source_raw: Optional[str] = None
+    source_renovated: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Access passcode (see app/access_control.py)

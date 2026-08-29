@@ -77,11 +77,24 @@ class DistrictBenchmark(Base):
     __tablename__ = "district_benchmarks"
 
     district_number = Column(Integer, primary_key=True)  # 1-23 (Budapest districts I-XXIII)
-    avg_price_sqm_raw = Column(Float, nullable=True)  # avg HUF/sqm for unrenovated ("raw") condition
-    avg_price_sqm_renovated = Column(Float, nullable=True)  # avg HUF/sqm for renovated condition
+    avg_price_sqm_raw = Column(Float, nullable=True)  # median HUF/sqm for unrenovated ("raw") condition — live or fallback, see source_raw
+    avg_price_sqm_renovated = Column(Float, nullable=True)  # median HUF/sqm for renovated condition — live or fallback, see source_renovated
     avg_rent_huf_sqm = Column(Float, nullable=True)  # avg monthly HUF/sqm rent, powers rental yield
     centroid_lat = Column(Float, nullable=True)  # map fallback pin + geocoding fallback
     centroid_lng = Column(Float, nullable=True)
+
+    # Set by app/services/stats_service.py's update_district_benchmarks() —
+    # how many live scraped listings (within its rolling window) the
+    # avg_price_sqm_raw/renovated figure above is actually based on, and
+    # whether that figure is a live-computed median ("live") or the
+    # documented seed_data.json baseline ("fallback", used whenever a
+    # district/category has fewer than stats_service.MIN_LIVE_SAMPLES
+    # samples). Both null until update_district_benchmarks() has run at
+    # least once (e.g. a row created by hand via POST /district-benchmarks).
+    sample_count_raw = Column(Integer, nullable=True)
+    sample_count_renovated = Column(Integer, nullable=True)
+    source_raw = Column(String(20), nullable=True)  # "live" | "fallback"
+    source_renovated = Column(String(20), nullable=True)  # "live" | "fallback"
     updated_at = Column(
         DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False
     )

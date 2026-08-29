@@ -16,6 +16,8 @@ import traceback
 from typing import Tuple
 
 from app import analyzer
+from app.database import SessionLocal
+from app.services import stats_service
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,18 @@ def run_job(max_listings: int, eur_huf_rate: float) -> None:
 
         results = run_agent(max_listings=max_listings, eur_huf_rate=eur_huf_rate)
         stored = sum(1 for r in results if r.stored)
+
+        # Refresh district benchmarks from the now-freshly-scraped listings —
+        # see app/services/stats_service.py. Best-effort: a bad recompute
+        # must never make an otherwise-successful scan report as failed.
+        db = SessionLocal()
+        try:
+            stats_service.update_district_benchmarks(db)
+        except Exception:  # noqa: BLE001
+            logger.exception("update_district_benchmarks failed after scan")
+        finally:
+            db.close()
+
         with _lock:
             _state["last_result"] = {"stored": stored, "total": len(results)}
             _state["error"] = None
