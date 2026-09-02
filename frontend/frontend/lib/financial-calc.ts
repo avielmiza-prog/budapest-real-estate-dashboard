@@ -9,6 +9,9 @@ import type { PropertyAnalysis, RenovationTier } from "@/lib/types";
 
 const SAFETY_BUFFER_RATE = 0.05;
 const RENTAL_OPEX_RATE = 0.2;
+// 3% sales/broker commission on the exit price — matches backend/app/analyzer.py's
+// BROKER_FEE_RATE, the platform's single source of truth for this fee.
+const BROKER_FEE_RATE = 0.03;
 
 export function computeCustomTier(analysis: PropertyAnalysis, customCostEurPerSqm: number): RenovationTier {
   const renovationCostHuf = analysis.usable_area_sqm * customCostEurPerSqm * analysis.eur_huf_rate;
@@ -17,7 +20,8 @@ export function computeCustomTier(analysis: PropertyAnalysis, customCostEurPerSq
     (analysis.asking_price_huf + analysis.property_transfer_tax_huf + analysis.legal_notary_fee_huf + renovationCostHuf);
   const totalInvestmentHuf =
     analysis.asking_price_huf + analysis.acquisition_cost_huf + renovationCostHuf + safetyBufferHuf;
-  const netProfitHuf = analysis.exit_price_huf - totalInvestmentHuf;
+  const brokerFeeHuf = analysis.exit_price_huf * BROKER_FEE_RATE;
+  const netProfitHuf = analysis.exit_price_huf - totalInvestmentHuf - brokerFeeHuf;
   const roiPercent = totalInvestmentHuf > 0 ? (netProfitHuf / totalInvestmentHuf) * 100 : null;
 
   let grossAnnualRentHuf: number | null = null;
@@ -35,8 +39,9 @@ export function computeCustomTier(analysis: PropertyAnalysis, customCostEurPerSq
     renovation_cost_huf: renovationCostHuf,
     safety_buffer_huf: safetyBufferHuf,
     total_investment_huf: totalInvestmentHuf,
-    break_even_price_huf: totalInvestmentHuf,
+    break_even_price_huf: totalInvestmentHuf / (1 - BROKER_FEE_RATE),
     exit_price_huf: analysis.exit_price_huf,
+    broker_fee_huf: brokerFeeHuf,
     net_profit_huf: netProfitHuf,
     roi_percent: roiPercent,
     gross_annual_rent_huf: grossAnnualRentHuf,

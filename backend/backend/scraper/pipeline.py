@@ -40,9 +40,9 @@ from scraper.retry import with_retry
 from scraper.stealth import (
     DEFAULT_EXTRA_HTTP_HEADERS,
     DEFAULT_TIMEOUT_MS,
-    DEFAULT_USER_AGENT,
     DEFAULT_VIEWPORT,
     apply_stealth,
+    random_user_agent,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ def _polite_sleep(delay_range: tuple) -> None:
 
 def _new_stealth_page(browser):
     context = browser.new_context(
-        user_agent=DEFAULT_USER_AGENT,
+        user_agent=random_user_agent(),
         viewport=DEFAULT_VIEWPORT,
         extra_http_headers=DEFAULT_EXTRA_HTTP_HEADERS,
     )

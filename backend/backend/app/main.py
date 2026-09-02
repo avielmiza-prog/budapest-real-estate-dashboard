@@ -127,6 +127,7 @@ async def on_startup() -> None:
         # them. See app/services/stats_service.py.
         try:
             stats_service.update_district_benchmarks(db)
+            stats_service.update_building_type_benchmarks(db)
         except Exception:  # noqa: BLE001 - must never block startup
             logger.exception("update_district_benchmarks failed during startup")
     finally:
@@ -685,7 +686,8 @@ def recompute_district_benchmarks(db: Session = Depends(get_db)):
     import) without waiting for either.
     """
     districts_updated = stats_service.update_district_benchmarks(db)
-    return {"districts_updated": districts_updated}
+    building_type_rows_updated = stats_service.update_building_type_benchmarks(db)
+    return {"districts_updated": districts_updated, "building_type_rows_updated": building_type_rows_updated}
 
 
 @app.delete("/district-benchmarks/{district_number}", status_code=204, tags=["district-benchmarks"])
@@ -694,3 +696,28 @@ def delete_district_benchmark(district_number: int, db: Session = Depends(get_db
     if not deleted:
         raise HTTPException(status_code=404, detail="District benchmark not found")
     return None
+
+
+# ---------------------------------------------------------------------------
+# Building-type benchmarks (see app.models.BuildingTypeBenchmark)
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/building-type-benchmarks",
+    response_model=List[schemas.BuildingTypeBenchmarkOut],
+    tags=["district-benchmarks"],
+)
+def list_building_type_benchmarks(
+    district_number: Optional[int] = Query(default=None, description="Filter to a single district (1-23)."),
+    db: Session = Depends(get_db),
+):
+    """
+    Median HUF/sqm segmented by district AND building type (Polgári/
+    Panelház/Új építés) — see app.services.stats_service.update_building_type_
+    benchmarks(). Recomputed on the same schedule as /district-benchmarks
+    (startup, every scan cycle, and POST /district-benchmarks/recompute).
+    """
+    query = db.query(models.BuildingTypeBenchmark)
+    if district_number is not None:
+        query = query.filter(models.BuildingTypeBenchmark.district_number == district_number)
+    return query.order_by(models.BuildingTypeBenchmark.district_number, models.BuildingTypeBenchmark.building_type).all()

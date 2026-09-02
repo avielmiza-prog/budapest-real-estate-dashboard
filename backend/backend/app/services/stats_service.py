@@ -52,6 +52,10 @@ ROLLING_WINDOW_DAYS = 90  # last 30-90 days of scraped data feed the median; see
 MIN_LIVE_SAMPLES = 10  # below this many collected samples, fall back to the documented baseline
 OUTLIER_TRIM_FRACTION = 0.05  # drop the bottom/top 5% of each group before taking the median
 
+# 85th-percentile exit-price basis for app.services.scenario_analysis's
+# "Optimistic" scenario — see DistrictBenchmark.p85_price_sqm_renovated.
+OPTIMISTIC_PERCENTILE = 85
+
 SEED_DATA_PATH = Path(__file__).resolve().parent.parent.parent / "seed_data.json"
 
 _RENOVATED_TAGS = {CONDITION_RENOVATED, CONDITION_NEW_CONSTRUCTION}
@@ -96,6 +100,15 @@ def _trimmed_median(values: List[float]) -> Optional[float]:
     trim = int(n * OUTLIER_TRIM_FRACTION)
     trimmed = ordered[trim : n - trim] if n - 2 * trim > 0 else ordered
     return statistics.median(trimmed)
+
+
+def _percentile(values: List[float], pct: float) -> Optional[float]:
+    """Nearest-rank percentile (0-100) of `values` — no interpolation, simple and dependency-free."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(0, min(len(ordered) - 1, int(round(pct / 100 * (len(ordered) - 1)))))
+    return ordered[rank]
 
 
 def update_district_benchmarks(db: Session) -> int:
@@ -146,9 +159,14 @@ def update_district_benchmarks(db: Session) -> int:
         if len(renovated_values) >= MIN_LIVE_SAMPLES:
             avg_price_sqm_renovated = _trimmed_median(renovated_values)
             source_renovated = "live"
+            p85_price_sqm_renovated = _percentile(renovated_values, OPTIMISTIC_PERCENTILE)
         else:
             avg_price_sqm_renovated = base_row.get("avg_price_sqm_renovated")
             source_renovated = "fallback"
+            # No live sample set to draw a real percentile from — leave it
+            # unset; app.services.scenario_analysis falls back to a
+            # documented multiplier of avg_price_sqm_renovated instead.
+            p85_price_sqm_renovated = None
 
         benchmark = existing.get(district_number)
         if benchmark is None:
@@ -168,6 +186,7 @@ def update_district_benchmarks(db: Session) -> int:
         benchmark.sample_count_renovated = len(renovated_values)
         benchmark.source_raw = source_raw
         benchmark.source_renovated = source_renovated
+        benchmark.p85_price_sqm_renovated = p85_price_sqm_renovated
         touched += 1
 
     db.commit()
@@ -177,4 +196,65 @@ def update_district_benchmarks(db: Session) -> int:
         len(properties),
         ROLLING_WINDOW_DAYS,
     )
+    return touched
+
+
+# Below MIN_LIVE_SAMPLES for a given (district, building_type) pair, no row
+# is published — a noisy 2-3-sample "median" segmented this finely would be
+# actively misleading rather than just imprecise. Deliberately smaller than
+# MIN_LIVE_SAMPLES (district-only medians): a per-building-type cut of the
+# same rolling window naturally has fewer samples per bucket, and this
+# benchmark is informational-only (see BuildingTypeBenchmark's docstring),
+# never fed into the actual ROI math the way avg_price_sqm_renovated is.
+MIN_BUILDING_TYPE_SAMPLES = 5
+
+
+def update_building_type_benchmarks(db: Session) -> int:
+    """
+    Recomputes BuildingTypeBenchmark's avg_price_sqm/sample_count for every
+    (district, building_type) pair seen in the same rolling window as
+    update_district_benchmarks() — median HUF/sqm segmented by district AND
+    building type (Polgári/Panelház/Új építés), for the "sub-market
+    precision" comparison surfaced via GET /building-type-benchmarks and
+    each /deals item. Purely informational — see that model's docstring for
+    why the core ROI math stays on the district-only benchmark.
+
+    Returns the number of (district, building_type) rows actually touched.
+    """
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=ROLLING_WINDOW_DAYS)
+    properties = (
+        db.query(models.Property)
+        .filter(models.Property.price_per_sqm.isnot(None))
+        .filter(models.Property.building_type.isnot(None))
+        .filter(models.Property.created_at >= cutoff)
+        .all()
+    )
+
+    groups: Dict[Tuple[int, str], List[float]] = {}
+    for prop in properties:
+        try:
+            district_number = parse_district_number(prop.district)
+        except ValueError:
+            continue
+        groups.setdefault((district_number, prop.building_type), []).append(prop.price_per_sqm)
+
+    existing = {
+        (b.district_number, b.building_type): b for b in db.query(models.BuildingTypeBenchmark).all()
+    }
+
+    touched = 0
+    for (district_number, building_type), values in groups.items():
+        if len(values) < MIN_BUILDING_TYPE_SAMPLES:
+            continue
+        key = (district_number, building_type)
+        benchmark = existing.get(key)
+        if benchmark is None:
+            benchmark = models.BuildingTypeBenchmark(district_number=district_number, building_type=building_type)
+            db.add(benchmark)
+        benchmark.avg_price_sqm = _trimmed_median(values)
+        benchmark.sample_count = len(values)
+        touched += 1
+
+    db.commit()
+    logger.info("update_building_type_benchmarks: refreshed %d (district, building_type) row(s)", touched)
     return touched

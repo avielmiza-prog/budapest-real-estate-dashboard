@@ -7,6 +7,8 @@ about text parsing).
 import logging
 from typing import Optional
 
+from app.building_classifier import classify_building_type, extract_ceiling_height_m
+from app.sub_district import extract_sub_district
 from scraper import text_parsing as tp
 from scraper import url_utils
 from scraper.base import RawListing
@@ -46,6 +48,20 @@ def normalize_listing(raw: RawListing, portal_name: str) -> Optional[dict]:
     if price_huf and size_sqm:
         price_per_sqm = round(price_huf / size_sqm, 2)
 
+    # Sub-market precision fields — best-effort keyword extraction from
+    # whatever free text the portal gave us (title/description carry these
+    # signals far more often than the structured address field). See
+    # app.building_classifier / app.sub_district for the matching rules.
+    combined_text = " ".join(
+        filter(None, [raw.title_text, raw.description_text, raw.condition_text])
+    )
+    building_type = classify_building_type(combined_text)
+    ceiling_height_m = extract_ceiling_height_m(combined_text)
+    sub_district = extract_sub_district(
+        " ".join(filter(None, [raw.address_text, raw.title_text, raw.description_text])),
+        district,
+    )
+
     return {
         "title": raw.title_text,
         "district": district or "unknown",
@@ -73,4 +89,7 @@ def normalize_listing(raw: RawListing, portal_name: str) -> Optional[dict]:
         # balcony/terrace size. A boolean "has balcony" flag with no size
         # (e.g. jofogas.hu) is not enough to populate this.
         "balcony_sqm": raw.balcony_sqm,
+        "building_type": building_type,
+        "ceiling_height_m": ceiling_height_m,
+        "sub_district": sub_district,
     }

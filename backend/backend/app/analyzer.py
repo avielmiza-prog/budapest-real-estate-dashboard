@@ -20,8 +20,13 @@ need tuning as real market data comes in):
   rate is used (see DEFAULT_EUR_HUF_RATE below) — pass `eur_huf_rate=` to
   override with the day's actual rate.
 - Acquisition costs = 4% property transfer tax ("visszterhes vagyonátruházási
-  illeték") + 1% legal/notary fee, both applied to the asking price. Does not
-  include mortgage/financing costs, since those depend on the buyer.
+  illeték") + 1.5% legal/notary fee, both applied to the asking price. Does
+  not include mortgage/financing costs, since those depend on the buyer.
+  These rates (PROPERTY_TRANSFER_TAX_RATE, LEGAL_NOTARY_FEE_RATE) plus
+  BROKER_FEE_RATE below are the platform's single source of truth for these
+  fees — app.services.valuation_agent's automated underwriting agent and
+  app.services.scenario_analysis's sensitivity scenarios both import them
+  from here rather than keeping their own copies.
 - Exit price after renovation = district's `avg_price_sqm_renovated` (HUF/sqm)
   x size_sqm. This assumes the property, once renovated to that tier, sells
   at the district's average renovated price/sqm — a simplification; a "Light"
@@ -30,9 +35,10 @@ need tuning as real market data comes in):
   the same exit price is used across all three tiers here. Flag this if you
   want tier-differentiated exit pricing (e.g. Light -> blend of raw/renovated
   benchmarks) instead.
-- Net profit does not subtract a resale agent commission or capital gains
-  tax, since neither was specified. Both are easy to add as extra rate
-  constants if wanted.
+- Net profit subtracts a 3% resale/broker commission (BROKER_FEE_RATE),
+  applied to the exit price of each tier — it does not subtract capital
+  gains tax, since that wasn't specified; easy to add as an extra rate
+  constant if wanted.
 - Weighted usable area: when a property has a balcony/terrace size on file,
   renovation cost and exit price are based on `size_sqm + balcony_sqm * 0.5`
   (standard "half-weighted balcony" valuation convention), not raw interior
@@ -68,8 +74,12 @@ RENOVATION_TIERS_EUR_PER_SQM: Dict[str, float] = {
 }
 
 PROPERTY_TRANSFER_TAX_RATE = 0.04  # Hungarian "illeték"
-LEGAL_NOTARY_FEE_RATE = 0.01
-ACQUISITION_COST_RATE = PROPERTY_TRANSFER_TAX_RATE + LEGAL_NOTARY_FEE_RATE  # 5%
+LEGAL_NOTARY_FEE_RATE = 0.015
+ACQUISITION_COST_RATE = PROPERTY_TRANSFER_TAX_RATE + LEGAL_NOTARY_FEE_RATE  # 5.5%
+
+# Sales/broker commission, applied to the exit (resale) price and subtracted
+# from net profit — see the module docstring's assumptions list.
+BROKER_FEE_RATE = 0.03
 
 # Applied to (price + transfer tax + legal fee + renovation cost), covers
 # unforeseen costs on top of the itemized ones above.
@@ -134,6 +144,7 @@ class RenovationTierResult:
     safety_buffer_huf: float
     total_investment_huf: float
     exit_price_huf: float
+    broker_fee_huf: float
     net_profit_huf: float
     roi_percent: Optional[float]  # None if total_investment_huf is 0 (can't divide)
     gross_annual_rent_huf: Optional[float] = None
@@ -144,12 +155,14 @@ class RenovationTierResult:
     def break_even_price_huf(self) -> float:
         """
         The sale price at which net_profit_huf would be exactly 0 — i.e. the
-        minimum exit price that recoups the full total investment. Since
-        net_profit_huf = exit_price_huf - total_investment_huf, that's just
-        total_investment_huf itself; kept as its own named field so the
-        underwriting UI can label it distinctly from "total investment".
+        minimum exit price that recoups the full total investment plus the
+        broker fee charged on that same exit price. Since
+        net_profit_huf = exit_price_huf - total_investment_huf
+                         - exit_price_huf * BROKER_FEE_RATE,
+        solving for exit_price_huf at net_profit_huf = 0 gives
+        total_investment_huf / (1 - BROKER_FEE_RATE).
         """
-        return self.total_investment_huf
+        return self.total_investment_huf / (1 - BROKER_FEE_RATE)
 
     def to_dict(self) -> dict:
         return {
@@ -160,6 +173,7 @@ class RenovationTierResult:
             "total_investment_huf": round(self.total_investment_huf, 2),
             "break_even_price_huf": round(self.break_even_price_huf, 2),
             "exit_price_huf": round(self.exit_price_huf, 2),
+            "broker_fee_huf": round(self.broker_fee_huf, 2),
             "net_profit_huf": round(self.net_profit_huf, 2),
             "roi_percent": round(self.roi_percent, 2) if self.roi_percent is not None else None,
             "gross_annual_rent_huf": round(self.gross_annual_rent_huf, 2)
@@ -235,17 +249,24 @@ def calculate_property_transfer_tax_huf(asking_price_huf: float) -> float:
 
 
 def calculate_legal_notary_fee_huf(asking_price_huf: float) -> float:
-    """1% legal/notary fee, applied to the asking price."""
+    """1.5% legal/notary fee, applied to the asking price."""
     if asking_price_huf < 0:
         raise ValueError("asking_price_huf must be >= 0")
     return asking_price_huf * LEGAL_NOTARY_FEE_RATE
 
 
 def calculate_acquisition_costs(asking_price_huf: float) -> float:
-    """4% transfer tax + 1% legal/notary fee, applied to the asking price."""
+    """4% transfer tax + 1.5% legal/notary fee, applied to the asking price."""
     return calculate_property_transfer_tax_huf(asking_price_huf) + calculate_legal_notary_fee_huf(
         asking_price_huf
     )
+
+
+def calculate_broker_fee_huf(exit_price_huf: float) -> float:
+    """3% sales/broker commission, applied to the projected exit (resale) price."""
+    if exit_price_huf < 0:
+        raise ValueError("exit_price_huf must be >= 0")
+    return exit_price_huf * BROKER_FEE_RATE
 
 
 def calculate_renovation_cost_huf(
@@ -349,7 +370,8 @@ def analyze_property(
         total_investment_huf = (
             asking_price_huf + acquisition_cost_huf + renovation_cost_huf + safety_buffer_huf
         )
-        net_profit_huf = exit_price_huf - total_investment_huf
+        broker_fee_huf = calculate_broker_fee_huf(exit_price_huf)
+        net_profit_huf = exit_price_huf - total_investment_huf - broker_fee_huf
         roi_percent = (
             (net_profit_huf / total_investment_huf) * 100 if total_investment_huf > 0 else None
         )
@@ -364,6 +386,7 @@ def analyze_property(
                 safety_buffer_huf=safety_buffer_huf,
                 total_investment_huf=total_investment_huf,
                 exit_price_huf=exit_price_huf,
+                broker_fee_huf=broker_fee_huf,
                 net_profit_huf=net_profit_huf,
                 roi_percent=roi_percent,
                 gross_annual_rent_huf=gross_annual_rent_huf,

@@ -32,6 +32,11 @@ class PropertyBase(BaseModel):
     longitude: Optional[float] = None
     is_favorite: bool = False
     pipeline_status: str = "new"
+    notes: Optional[str] = None
+    # Sub-market precision fields — see app.building_classifier/app.sub_district.
+    building_type: Optional[str] = None
+    ceiling_height_m: Optional[float] = None
+    sub_district: Optional[str] = None
 
     @field_validator("pipeline_status")
     @classmethod
@@ -65,6 +70,10 @@ class PropertyUpdate(BaseModel):
     longitude: Optional[float] = None
     is_favorite: Optional[bool] = None
     pipeline_status: Optional[str] = None
+    notes: Optional[str] = None
+    building_type: Optional[str] = None
+    ceiling_height_m: Optional[float] = None
+    sub_district: Optional[str] = None
 
     @field_validator("pipeline_status")
     @classmethod
@@ -144,6 +153,22 @@ class DistrictBenchmarkOut(DistrictBenchmarkBase):
     sample_count_renovated: Optional[int] = None
     source_raw: Optional[str] = None
     source_renovated: Optional[str] = None
+    # 85th-percentile live renovated HUF/sqm — see app.services.scenario_analysis.
+    p85_price_sqm_renovated: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# BuildingTypeBenchmark — see app.models.BuildingTypeBenchmark
+# ---------------------------------------------------------------------------
+
+class BuildingTypeBenchmarkOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    district_number: int
+    building_type: str
+    avg_price_sqm: Optional[float] = None
+    sample_count: int
+    updated_at: datetime.datetime
 
 
 # ---------------------------------------------------------------------------

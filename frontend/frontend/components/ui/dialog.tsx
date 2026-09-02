@@ -37,7 +37,13 @@ const DialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         "fixed left-[50%] top-[50%] z-50 grid w-full max-w-2xl translate-x-[-50%] translate-y-[-50%] gap-4",
-        "max-h-[90vh] overflow-y-auto rounded-lg border bg-background p-6 shadow-lg",
+        "max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-lg border bg-background p-6 shadow-lg",
+        // Grid items default to min-width:auto (their content's min-content
+        // size), so a wide child (e.g. a multi-column table) would otherwise
+        // force this whole dialog wider instead of scrolling internally via
+        // its own overflow-x-auto wrapper. min-w-0 lets grid tracks actually
+        // shrink to the dialog's own max-w, so only the wide child scrolls.
+        "[&>*]:min-w-0",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
         className

@@ -23,16 +23,19 @@ from typing import Optional
 
 import httpx
 
+from scraper.stealth import random_user_agent
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+BASE_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "hu-HU,hu;q=0.9,en-US;q=0.8,en;q=0.7",
 }
+
+
+def _request_headers() -> dict:
+    """Base headers plus a randomly-chosen User-Agent — see scraper.stealth.USER_AGENT_POOL."""
+    return {**BASE_HEADERS, "User-Agent": random_user_agent()}
 
 # Statuses worth retrying with a real-browser TLS fingerprint before giving
 # up — anything else (404, 500, ...) is a real error curl_cffi won't fix.
@@ -52,7 +55,7 @@ def fetch_html(url: str, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> str:
     callers should treat that as "this portal/page needs Playwright now."
     """
     try:
-        response = httpx.get(url, headers=DEFAULT_HEADERS, follow_redirects=True, timeout=timeout)
+        response = httpx.get(url, headers=_request_headers(), follow_redirects=True, timeout=timeout)
     except httpx.HTTPError as e:
         logger.info("httpx fetch of %s failed (%s) — trying curl_cffi", url, e)
         return _fetch_html_via_curl_cffi_or_raise(url, timeout, reason=str(e))

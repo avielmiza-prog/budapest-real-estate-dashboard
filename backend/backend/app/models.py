@@ -45,7 +45,16 @@ class Property(Base):
     longitude = Column(Float, nullable=True)
     is_favorite = Column(Boolean, nullable=False, default=False)
     pipeline_status = Column(String(30), nullable=False, default="new")
+    notes = Column(Text, nullable=True)  # free-text investor notes on a shortlisted deal, editable via PATCH
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    # Sub-market precision fields — extracted from listing text by
+    # app/building_classifier.py and app/sub_district.py (see their
+    # docstrings). All nullable/best-effort: a listing whose text doesn't
+    # match any known keyword simply leaves these unset rather than guessing.
+    building_type = Column(String(40), nullable=True)  # "Brick Classical (Polgári)" | "Panel Block (Panelház)" | "New Build (Új építés)"
+    ceiling_height_m = Column(Float, nullable=True)  # parsed from listing text, e.g. "3,2 m belmagasság"
+    sub_district = Column(String(60), nullable=True)  # micro-neighborhood, e.g. "Újlipótváros", "Belső-Erzsébetváros"
 
     # Other portals' URLs for the same real-world listing, found by
     # scraper/dedup.py (district + floor area ±2 sqm + price ±2% match) and
@@ -95,9 +104,44 @@ class DistrictBenchmark(Base):
     sample_count_renovated = Column(Integer, nullable=True)
     source_raw = Column(String(20), nullable=True)  # "live" | "fallback"
     source_renovated = Column(String(20), nullable=True)  # "live" | "fallback"
+
+    # 85th percentile of recently-scraped renovated HUF/sqm listings in this
+    # district — the "Optimistic" exit-price basis for
+    # app/services/scenario_analysis.py. Falls back to
+    # avg_price_sqm_renovated * OPTIMISTIC_FALLBACK_MULTIPLIER (see that
+    # module) when too few live samples exist for a real percentile. Set by
+    # the same update_district_benchmarks() pass as the fields above.
+    p85_price_sqm_renovated = Column(Float, nullable=True)
+
     updated_at = Column(
         DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<DistrictBenchmark district={self.district_number}>"
+
+
+class BuildingTypeBenchmark(Base):
+    """
+    Median HUF/sqm segmented by district AND building type (Polgári /
+    Panelház / Új építés) — a finer-grained cut than DistrictBenchmark's
+    district-only medians, computed by
+    app/services/stats_service.py::update_building_type_benchmarks().
+    Purely informational (surfaced via GET /building-type-benchmarks and
+    attached to each /deals item) — the exit-price benchmark used in the
+    actual ROI math stays DistrictBenchmark.avg_price_sqm_renovated, so a
+    building type with too few samples never silently changes anyone's ROI.
+    """
+
+    __tablename__ = "building_type_benchmarks"
+
+    district_number = Column(Integer, primary_key=True)
+    building_type = Column(String(40), primary_key=True)
+    avg_price_sqm = Column(Float, nullable=True)  # trimmed median HUF/sqm for this district x building type
+    sample_count = Column(Integer, nullable=False, default=0)
+    updated_at = Column(
+        DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"<BuildingTypeBenchmark district={self.district_number} type={self.building_type!r}>"

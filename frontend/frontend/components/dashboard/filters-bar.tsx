@@ -232,15 +232,15 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
             </div>
           </div>
 
-          <label className="flex items-center gap-2 pb-1.5 text-sm">
-            <input
-              type="checkbox"
-              checked={filters.favoritesOnly}
-              onChange={(e) => update({ favoritesOnly: e.target.checked })}
-              className="h-4 w-4 rounded border-input accent-primary"
-            />
-            Saved only
-          </label>
+          <div className="flex flex-col gap-1.5 pb-0.5">
+            <Label>Shortlist</Label>
+            <Tabs value={filters.favoritesOnly ? "shortlist" : "all"} onValueChange={(v) => update({ favoritesOnly: v === "shortlist" })}>
+              <TabsList>
+                <TabsTrigger value="all">All Deals</TabsTrigger>
+                <TabsTrigger value="shortlist">My Saved Shortlist</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">

@@ -13,7 +13,7 @@ from app import analyzer  # noqa: E402
 
 
 def test_acquisition_costs():
-    assert analyzer.calculate_acquisition_costs(45_000_000) == 45_000_000 * 0.05
+    assert analyzer.calculate_acquisition_costs(45_000_000) == 45_000_000 * 0.055
     assert analyzer.calculate_acquisition_costs(0) == 0
     try:
         analyzer.calculate_acquisition_costs(-1)
@@ -45,7 +45,7 @@ def test_full_analysis_matches_hand_calculation():
         avg_price_sqm_renovated_huf=1_250_000,
         district="VII",
     )
-    assert result.acquisition_cost_huf == 45_000_000 * 0.05
+    assert result.acquisition_cost_huf == 45_000_000 * 0.055
     assert result.exit_price_huf == 55 * 1_250_000
 
     light = next(t for t in result.tiers if t.tier == "light")
@@ -54,12 +54,14 @@ def test_full_analysis_matches_hand_calculation():
         45_000_000 + result.acquisition_cost_huf + expected_reno
     )
     expected_investment = 45_000_000 + result.acquisition_cost_huf + expected_reno + expected_buffer
-    expected_profit = result.exit_price_huf - expected_investment
+    expected_broker_fee = result.exit_price_huf * analyzer.BROKER_FEE_RATE
+    expected_profit = result.exit_price_huf - expected_investment - expected_broker_fee
     expected_roi = expected_profit / expected_investment * 100
 
     assert light.renovation_cost_huf == expected_reno
     assert abs(light.safety_buffer_huf - expected_buffer) < 1e-6
     assert abs(light.total_investment_huf - expected_investment) < 1e-6
+    assert abs(light.broker_fee_huf - expected_broker_fee) < 1e-6
     assert abs(light.net_profit_huf - expected_profit) < 1e-6
     assert abs(light.roi_percent - expected_roi) < 1e-6
 

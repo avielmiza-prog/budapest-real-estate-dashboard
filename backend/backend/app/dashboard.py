@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app import analyzer, crud, deal_score as deal_score_module, models
 from app.condition_classifier import classify_condition_tag
+from app.services import scenario_analysis
 
 # Strict Net ROI hurdle applied by default — must match
 # app.services.valuation_agent.MIN_HURDLE_ROI_PERCENT (the same threshold the
@@ -337,6 +338,13 @@ def list_deals(
             if flip_roi is not None and flip_roi < min_flip_roi:
                 continue
 
+        # Conservative/Base/Optimistic sensitivity scenarios — see
+        # app.services.scenario_analysis. None when there's not enough data
+        # (missing size/price, or no renovated benchmark yet for this
+        # district), same degrade-gracefully rule as `analysis`/`underwriting`.
+        benchmark = _district_benchmark_or_none(db, prop.district)
+        scenarios = scenario_analysis.compute_scenarios(prop, benchmark)
+
         deals.append(
             {
                 "id": prop.id,
@@ -360,6 +368,10 @@ def list_deals(
                 "longitude": prop.longitude,
                 "is_favorite": prop.is_favorite,
                 "pipeline_status": prop.pipeline_status,
+                "notes": prop.notes,
+                "building_type": prop.building_type,
+                "ceiling_height_m": prop.ceiling_height_m,
+                "sub_district": prop.sub_district,
                 "created_at": prop.created_at.isoformat() if prop.created_at else None,
                 "analysis": analysis_dict,
                 "best_tier": best_tier,
@@ -370,6 +382,10 @@ def list_deals(
                 # nulls backfilled from the live analysis above — see comment
                 # above `has_underwriting`.
                 "underwriting": underwriting,
+                # Conservative/Base/Optimistic sensitivity — see
+                # app.services.scenario_analysis. None on the same
+                # missing-data conditions as `analysis`.
+                "scenarios": scenarios,
             }
         )
 
@@ -385,9 +401,10 @@ def list_deals(
 # pulling the underwriting metrics out of the nested `underwriting` dict so
 # every row is spreadsheet-ready with no post-processing.
 _CSV_COLUMNS = [
-    "id", "title", "district", "address", "size_sqm", "rooms", "balcony_sqm",
+    "id", "title", "district", "sub_district", "address", "size_sqm", "rooms", "balcony_sqm",
+    "building_type", "ceiling_height_m",
     "price_huf", "price_eur", "price_per_sqm", "condition", "condition_tag",
-    "portal", "url", "duplicate_source_urls", "pipeline_status", "is_favorite", "created_at",
+    "portal", "url", "duplicate_source_urls", "pipeline_status", "is_favorite", "notes", "created_at",
     "discount_percent", "deal_score", "deal_score_band",
     "underwriting_estimated_market_value_huf", "underwriting_renovation_cost_huf",
     "underwriting_total_investment_huf", "underwriting_net_profit_huf",

@@ -80,6 +80,7 @@ def run_job(max_listings: int, eur_huf_rate: float) -> None:
         db = SessionLocal()
         try:
             stats_service.update_district_benchmarks(db)
+            stats_service.update_building_type_benchmarks(db)
         except Exception:  # noqa: BLE001
             logger.exception("update_district_benchmarks failed after scan")
         finally:

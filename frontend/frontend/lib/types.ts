@@ -12,6 +12,7 @@ export interface RenovationTier {
   total_investment_huf: number;
   break_even_price_huf: number;
   exit_price_huf: number;
+  broker_fee_huf: number;
   net_profit_huf: number;
   roi_percent: number | null;
   gross_annual_rent_huf: number | null;
@@ -88,14 +89,46 @@ export const CONDITION_TAG_COLORS: Record<ConditionTag, string> = {
   "New Construction": "bg-blue-100 text-blue-800 border-blue-200",
 };
 
+// One Conservative/Base/Optimistic sensitivity scenario — see
+// backend/app/services/scenario_analysis.py.
+export interface Scenario {
+  exit_price_huf: number;
+  renovation_cost_huf: number;
+  total_investment_huf: number;
+  net_profit_huf: number;
+  roi_percent: number | null;
+}
+
+export type ScenarioName = "conservative" | "base" | "optimistic";
+
+export const SCENARIO_NAMES: ScenarioName[] = ["conservative", "base", "optimistic"];
+
+export const SCENARIO_LABELS: Record<ScenarioName, string> = {
+  conservative: "Conservative",
+  base: "Base",
+  optimistic: "Optimistic",
+};
+
+export interface Scenarios {
+  conservative: Scenario;
+  base: Scenario;
+  optimistic: Scenario;
+}
+
+// Building construction type — see backend/app/building_classifier.py.
+export type BuildingType = "Brick Classical (Polgári)" | "Panel Block (Panelház)" | "New Build (Új építés)";
+
 export interface Deal {
   id: number;
   title: string;
   district: string;
+  sub_district: string | null; // micro-neighborhood, e.g. "Újlipótváros" — see backend/app/sub_district.py
   address: string | null;
   size_sqm: number | null;
   rooms: number | null;
   balcony_sqm: number | null;
+  building_type: BuildingType | string | null;
+  ceiling_height_m: number | null;
   price_huf: number | null;
   price_eur: number | null;
   price_per_sqm: number | null;
@@ -110,6 +143,7 @@ export interface Deal {
   longitude: number | null;
   is_favorite: boolean;
   pipeline_status: PipelineStatus;
+  notes: string | null;
   created_at: string | null;
   analysis: PropertyAnalysis | null;
   best_tier: RenovationTier | null;
@@ -117,6 +151,7 @@ export interface Deal {
   deal_score: number | null;
   deal_score_band: DealScoreBand | null;
   underwriting: Underwriting | null;
+  scenarios: Scenarios | null;
 }
 
 export interface TopUndervaluedDeal {
@@ -223,6 +258,17 @@ export interface DistrictBenchmark {
   sample_count_renovated: number | null;
   source_raw: "live" | "fallback" | null;
   source_renovated: "live" | "fallback" | null;
+  p85_price_sqm_renovated: number | null;
+}
+
+// Median HUF/sqm segmented by district AND building type — see
+// backend/app/models.py's BuildingTypeBenchmark.
+export interface BuildingTypeBenchmark {
+  district_number: number;
+  building_type: string;
+  avg_price_sqm: number | null;
+  sample_count: number;
+  updated_at: string;
 }
 
 export interface ScraperStatus {

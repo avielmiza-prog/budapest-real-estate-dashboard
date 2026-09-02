@@ -29,8 +29,14 @@ module's docstring). This module doesn't call it directly; it just trusts
 whatever DistrictBenchmark.avg_price_sqm_renovated currently holds, same as
 before that function existed.
 
-Formulas (all in HUF unless noted):
-  Renovation Cost      = size_sqm * condition-implied HUF/sqm estimate
+Formulas (all in HUF unless noted; rate constants — ACQUISITION_TAX_RATE,
+LEGAL_CLOSING_RATE, BROKER_FEE_RATE — are imported from app.analyzer, the
+platform's single source of truth for these fees, not redefined here):
+  Renovation Cost      = size_sqm * condition-and-building-type-adjusted
+                          HUF/sqm estimate (see app.renovation_estimator,
+                          which layers app.building_classifier's Polgári/
+                          Panelház/ceiling-height multiplier on top of
+                          app.condition_classifier's condition-based baseline)
   Total Investment     = Purchase Price + Renovation Cost
                           + Purchase Price * 4%  (acquisition/transfer tax, "illeték")
                           + Purchase Price * 1.5% (legal/notary/closing costs)
@@ -55,21 +61,10 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app import analyzer, crud, models
-from app.condition_classifier import (
-    CONDITION_AVERAGE,
-    CONDITION_NEEDS_RENOVATION,
-    CONDITION_NEW_CONSTRUCTION,
-    CONDITION_RENOVATED,
-    classify_condition,
-    classify_condition_tag,
-    estimate_renovation_cost_huf_per_sqm,
-)
+from app.analyzer import BROKER_FEE_RATE, LEGAL_NOTARY_FEE_RATE as LEGAL_CLOSING_RATE, PROPERTY_TRANSFER_TAX_RATE as ACQUISITION_TAX_RATE
+from app.renovation_estimator import estimate_adjusted_renovation_cost_huf_per_sqm
 
 logger = logging.getLogger(__name__)
-
-ACQUISITION_TAX_RATE = 0.04  # Hungarian property transfer tax ("illeték")
-LEGAL_CLOSING_RATE = 0.015  # legal/notary + closing costs
-BROKER_FEE_RATE = 0.03  # sales/broker commission, paid out of the projected exit price
 
 MIN_HURDLE_ROI_PERCENT = 10.0  # flip ROI below this -> "risk:below_hurdle_roi"
 
@@ -169,7 +164,9 @@ def validate_and_underwrite(prop: models.Property, db: Session) -> UnderwritingR
     if not prop.size_sqm or prop.size_sqm <= 0 or not prop.price_huf or prop.price_huf <= 0:
         return UnderwritingResult(None, None, None, None, None, None, None, "insufficient_data", None)
 
-    reno_cost_per_sqm = estimate_renovation_cost_huf_per_sqm(prop.condition)
+    reno_cost_per_sqm = estimate_adjusted_renovation_cost_huf_per_sqm(
+        prop.condition, prop.building_type, prop.ceiling_height_m
+    )
     renovation_cost_huf = reno_cost_per_sqm * prop.size_sqm
 
     acquisition_tax_huf = prop.price_huf * ACQUISITION_TAX_RATE

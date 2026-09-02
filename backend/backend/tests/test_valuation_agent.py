@@ -18,6 +18,14 @@ os.environ["DATABASE_URL"] = f"sqlite:///{Path(_tmp_db_dir) / 'test.db'}"
 import pytest  # noqa: E402
 
 from app import crud, models, schemas  # noqa: E402
+from app.condition_classifier import (  # noqa: E402
+    CONDITION_AVERAGE,
+    CONDITION_NEEDS_RENOVATION,
+    CONDITION_NEW_CONSTRUCTION,
+    CONDITION_RENOVATED,
+    classify_condition_tag,
+    estimate_renovation_cost_huf_per_sqm,
+)
 from app.database import SessionLocal, init_db  # noqa: E402
 from app.services import valuation_agent as va  # noqa: E402
 
@@ -26,32 +34,34 @@ init_db()
 
 # ---------------------------------------------------------------------------
 # classify_condition / estimate_renovation_cost_huf_per_sqm / classify_condition_tag
+# (app.condition_classifier — valuation_agent no longer re-exports these, it
+# imports app.renovation_estimator instead; see that module's docstring)
 # ---------------------------------------------------------------------------
 
 def test_unrenovated_condition_gets_needs_renovation_point_estimate():
-    assert va.estimate_renovation_cost_huf_per_sqm("Felújítandó, jó lehetőség") == 220_000
-    assert va.classify_condition_tag("Felújítandó, jó lehetőség") == va.CONDITION_NEEDS_RENOVATION
-    assert va.classify_condition_tag("Rossz állapotú, sürgősen eladó") == va.CONDITION_NEEDS_RENOVATION
+    assert estimate_renovation_cost_huf_per_sqm("Felújítandó, jó lehetőség") == 220_000
+    assert classify_condition_tag("Felújítandó, jó lehetőség") == CONDITION_NEEDS_RENOVATION
+    assert classify_condition_tag("Rossz állapotú, sürgősen eladó") == CONDITION_NEEDS_RENOVATION
 
 
 def test_average_condition_gets_average_point_estimate():
-    assert va.estimate_renovation_cost_huf_per_sqm("Átlagos állapotú lakás") == 120_000
-    assert va.classify_condition_tag("Átlagos állapotú lakás") == va.CONDITION_AVERAGE
-    assert va.classify_condition_tag("Lakható állapotban") == va.CONDITION_AVERAGE
+    assert estimate_renovation_cost_huf_per_sqm("Átlagos állapotú lakás") == 120_000
+    assert classify_condition_tag("Átlagos állapotú lakás") == CONDITION_AVERAGE
+    assert classify_condition_tag("Lakható állapotban") == CONDITION_AVERAGE
 
 
 def test_renovated_and_new_construction_get_zero_reno_cost_but_distinct_tags():
-    assert va.estimate_renovation_cost_huf_per_sqm("Felújított lakás") == 0
-    assert va.classify_condition_tag("Felújított, újszerű lakás") == va.CONDITION_RENOVATED
+    assert estimate_renovation_cost_huf_per_sqm("Felújított lakás") == 0
+    assert classify_condition_tag("Felújított, újszerű lakás") == CONDITION_RENOVATED
 
-    assert va.estimate_renovation_cost_huf_per_sqm("Új építésű, kulcsrakész") == 0
-    assert va.classify_condition_tag("Új építésű társasházban") == va.CONDITION_NEW_CONSTRUCTION
+    assert estimate_renovation_cost_huf_per_sqm("Új építésű, kulcsrakész") == 0
+    assert classify_condition_tag("Új építésű társasházban") == CONDITION_NEW_CONSTRUCTION
 
 
 def test_missing_condition_defaults_to_average_not_free():
-    assert va.estimate_renovation_cost_huf_per_sqm(None) == 120_000
-    assert va.estimate_renovation_cost_huf_per_sqm("") == 120_000
-    assert va.classify_condition_tag(None) == va.CONDITION_AVERAGE
+    assert estimate_renovation_cost_huf_per_sqm(None) == 120_000
+    assert estimate_renovation_cost_huf_per_sqm("") == 120_000
+    assert classify_condition_tag(None) == CONDITION_AVERAGE
 
 
 # ---------------------------------------------------------------------------

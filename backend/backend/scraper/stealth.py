@@ -19,6 +19,7 @@ rather than by default. See scraper/robots.py for a helper that checks
 robots.txt before scraping.
 """
 import logging
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,28 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
+
+# A small pool of realistic, current-ish desktop UAs (Chrome/Windows,
+# Chrome/Mac, Firefox/Windows, Edge/Windows) spread across a run rather than
+# sending the exact same fixed string on every request — a single unchanging
+# UA across hundreds of requests is itself a fingerprint some anti-bot
+# services flag. Each new context (see scraper/pipeline.py::_new_stealth_page)
+# picks one at random via random_user_agent().
+USER_AGENT_POOL = [
+    DEFAULT_USER_AGENT,
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0",
+]
+
+
+def random_user_agent() -> str:
+    """One UA from USER_AGENT_POOL, chosen at random — see that constant's docstring."""
+    return random.choice(USER_AGENT_POOL)
 
 DEFAULT_VIEWPORT = {"width": 1366, "height": 900}
 

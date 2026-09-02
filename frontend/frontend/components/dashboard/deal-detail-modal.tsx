@@ -43,11 +43,12 @@ import { computeCustomTier } from "@/lib/financial-calc";
 import { formatCurrency, formatDate, formatEur, formatHuf, formatPercent, formatRooms, formatSqm } from "@/lib/format";
 import { TIER_LABELS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import type { Currency, Deal, RenovationTier, RenovationTierName } from "@/lib/types";
+import { SCENARIO_LABELS, SCENARIO_NAMES, type Currency, type Deal, type RenovationTier, type RenovationTierName, type ScenarioName } from "@/lib/types";
 
 import { ConditionBadge } from "./condition-badge";
+import { DealMicroBadges } from "./deal-micro-badges";
 import { DealScoreBadge } from "./deal-score-badge";
-import { FavoriteToggle, PipelineStatusSelect } from "./deal-actions";
+import { FavoriteToggle, NotesEditor, PipelineStatusSelect } from "./deal-actions";
 import { ImageLightbox } from "./image-lightbox";
 import { RoiBadge } from "./roi-badge";
 
@@ -417,7 +418,7 @@ function FinancialBreakdownSection({
           <dd className="font-medium">{formatCurrency(analysis.property_transfer_tax_huf, currency, eurHufRate)}</dd>
         </div>
         <div className="flex justify-between">
-          <dt className="text-muted-foreground">Legal / notary fee (1%)</dt>
+          <dt className="text-muted-foreground">Legal / notary fee (1.5%)</dt>
           <dd className="font-medium">{formatCurrency(analysis.legal_notary_fee_huf, currency, eurHufRate)}</dd>
         </div>
         <div className="flex justify-between">
@@ -449,6 +450,10 @@ function FinancialBreakdownSection({
           <dt className="text-muted-foreground">Projected exit sale price</dt>
           <dd className="font-medium">{formatCurrency(selectedTier.exit_price_huf, currency, eurHufRate)}</dd>
         </div>
+        <div className="flex justify-between">
+          <dt className="text-muted-foreground">Broker / sales commission (3% of exit price)</dt>
+          <dd className="font-medium">{formatCurrency(selectedTier.broker_fee_huf, currency, eurHufRate)}</dd>
+        </div>
         {selectedTier.gross_annual_rent_huf !== null && (
           <div className="flex justify-between">
             <dt className="text-muted-foreground">Est. gross annual rent</dt>
@@ -473,6 +478,71 @@ function FinancialBreakdownSection({
   );
 }
 
+function ScenarioSection({ deal, currency, eurHufRate }: { deal: Deal; currency: Currency; eurHufRate: number }) {
+  const [selected, setSelected] = useState<ScenarioName>("base");
+
+  if (!deal.scenarios) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No district benchmark on file yet for district {deal.district} — can&apos;t project exit-price
+        scenarios for this listing.
+      </p>
+    );
+  }
+
+  const scenario = deal.scenarios[selected];
+  const isProfit = scenario.net_profit_huf >= 0;
+
+  return (
+    <div className="space-y-4">
+      <Tabs value={selected} onValueChange={(v) => setSelected(v as ScenarioName)}>
+        <TabsList>
+          {SCENARIO_NAMES.map((name) => (
+            <TabsTrigger key={name} value={name}>
+              {SCENARIO_LABELS[name]}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      <p className="text-xs text-muted-foreground">
+        {selected === "conservative" &&
+          "Downside case: exit price 5% below the district median, renovation cost 15% over budget."}
+        {selected === "base" && "The automated underwriting agent's own numbers — same as below, unchanged."}
+        {selected === "optimistic" &&
+          "Upside case: exit price marked up to the district's 85th-percentile recently-scraped renovated €/sqm."}
+      </p>
+
+      <div className="grid gap-4 rounded-lg border p-4 sm:grid-cols-3">
+        <div>
+          <p className="text-xs text-muted-foreground">Net Profit</p>
+          <p className={cn("text-lg font-bold", isProfit ? "text-emerald-600" : "text-red-600")}>
+            {formatCurrency(scenario.net_profit_huf, currency, eurHufRate)}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">ROI</p>
+          <RoiBadge roiPercent={scenario.roi_percent} />
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Exit Price</p>
+          <p className="text-sm font-medium">{formatCurrency(scenario.exit_price_huf, currency, eurHufRate)}</p>
+        </div>
+      </div>
+
+      <dl className="space-y-1.5 text-sm">
+        <div className="flex justify-between">
+          <dt className="text-muted-foreground">Renovation cost</dt>
+          <dd className="font-medium">{formatCurrency(scenario.renovation_cost_huf, currency, eurHufRate)}</dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-muted-foreground">Total investment</dt>
+          <dd className="font-medium">{formatCurrency(scenario.total_investment_huf, currency, eurHufRate)}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
 function AutomatedUnderwritingSection({ deal, currency, eurHufRate }: { deal: Deal; currency: Currency; eurHufRate: number }) {
   const uw = deal.underwriting;
   if (!uw) {
@@ -488,7 +558,7 @@ function AutomatedUnderwritingSection({ deal, currency, eurHufRate }: { deal: De
   const riskReasons = isRisk ? uw.status!.replace("risk:", "").split(",") : [];
   const riskLabels: Record<string, string> = {
     overpriced: "Asking price is above the district's turnkey median",
-    below_hurdle_roi: "Projected flip ROI is below the 12% minimum hurdle rate",
+    below_hurdle_roi: "Projected flip ROI is below the 10% minimum hurdle rate",
   };
 
   return (
@@ -607,10 +677,14 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
                 </div>
               </div>
               <DialogDescription>
-                District {deal.district} · {formatSqm(deal.size_sqm)} · {formatRooms(deal.rooms)} rooms
+                District {deal.district}
+                {deal.sub_district ? ` (${deal.sub_district})` : ""} · {formatSqm(deal.size_sqm)} ·{" "}
+                {formatRooms(deal.rooms)} rooms
                 {deal.condition ? ` · ${deal.condition}` : ""}
+                {deal.building_type ? ` · ${deal.building_type}` : ""}
                 {deal.portal ? ` · via ${deal.portal}` : ""}
               </DialogDescription>
+              <DealMicroBadges deal={deal} className="flex flex-wrap gap-1" />
             </DialogHeader>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -673,6 +747,18 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
                       <dd className="font-medium">{formatSqm(deal.balcony_sqm)}</dd>
                     </div>
                   )}
+                  {deal.building_type !== null && (
+                    <div className="flex justify-between">
+                      <dt className="text-muted-foreground">Building type</dt>
+                      <dd className="font-medium">{deal.building_type}</dd>
+                    </div>
+                  )}
+                  {deal.ceiling_height_m !== null && (
+                    <div className="flex justify-between">
+                      <dt className="text-muted-foreground">Ceiling height</dt>
+                      <dd className="font-medium">{deal.ceiling_height_m.toFixed(1)} m</dd>
+                    </div>
+                  )}
                 </dl>
               </div>
             </div>
@@ -697,6 +783,17 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
               <h4 className="mb-3 text-sm font-semibold">Automated underwriting verdict</h4>
               <AutomatedUnderwritingSection deal={deal} currency={currency} eurHufRate={eurHufRate} />
             </div>
+
+            <Separator />
+
+            <div>
+              <h4 className="mb-3 text-sm font-semibold">Sensitivity &amp; scenario analysis</h4>
+              <ScenarioSection deal={deal} currency={currency} eurHufRate={eurHufRate} />
+            </div>
+
+            <Separator />
+
+            <NotesEditor deal={deal} onUpdated={onDealUpdated} />
           </>
         )}
       </DialogContent>

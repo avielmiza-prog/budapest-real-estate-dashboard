@@ -156,8 +156,8 @@ export function getDealsExportCsvUrl(filters: DealFilters, eurHufRate: number): 
  */
 export async function updateProperty(
   propertyId: number,
-  patch: Partial<{ is_favorite: boolean; pipeline_status: PipelineStatus }>
-): Promise<{ is_favorite: boolean; pipeline_status: PipelineStatus }> {
+  patch: Partial<{ is_favorite: boolean; pipeline_status: PipelineStatus; notes: string }>
+): Promise<{ is_favorite: boolean; pipeline_status: PipelineStatus; notes: string | null }> {
   const url = new URL(`/properties/${propertyId}`, API_BASE_URL);
   const response = await fetch(url.toString(), {
     method: "PATCH",
@@ -168,7 +168,7 @@ export async function updateProperty(
     const detail = await response.text().catch(() => "");
     throw new ApiError(detail || `Failed to update property ${propertyId}`, response.status);
   }
-  return response.json() as Promise<{ is_favorite: boolean; pipeline_status: PipelineStatus }>;
+  return response.json() as Promise<{ is_favorite: boolean; pipeline_status: PipelineStatus; notes: string | null }>;
 }
 
 export function getFxRate(refresh = false): Promise<FxRate> {
