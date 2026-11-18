@@ -105,6 +105,10 @@ STATIC_BUILDING_TYPE_FACTOR = {
 BUILDING_TYPE_FACTOR_CLAMP = (0.70, 1.20)
 MIN_BUILDING_TYPE_SAMPLES = 5
 
+# Outside this size range district flat medians are not a fair comparison.
+MIN_TYPICAL_FLAT_SQM = 18
+MAX_TYPICAL_FLAT_SQM = 150
+
 # Verdict thresholds on net ROI after tax.
 TARGET_ROI_PERCENT = 15.0
 CONSIDER_ROI_PERCENT = 8.0
@@ -288,6 +292,11 @@ def evaluate_flip(
         reasons.append("no_building_type")
     if exit_price_sqm < price_sqm and scope != "none":
         reasons.append("above_renovated_market")  # asking HUF/sqm already above the renovated exit
+    unusual_size = size_sqm > MAX_TYPICAL_FLAT_SQM or size_sqm < MIN_TYPICAL_FLAT_SQM
+    if unusual_size:
+        # Very large "flats" in outer districts are usually family houses or
+        # whole buildings; district flat medians don't apply to them.
+        reasons.append("unusual_size")
     confidence = "high" if not reasons else ("medium" if len(reasons) == 1 else "low")
 
     if r["roi"] >= target_roi_percent:
@@ -296,6 +305,10 @@ def evaluate_flip(
         verdict = "consider"  # close enough that a negotiated price could make it work
     else:
         verdict = "skip"
+    if unusual_size and verdict == "buy":
+        verdict = "consider"  # never a confident "buy" off flat comps for a non-typical property
+    if unusual_size:
+        confidence = "low"
 
     return FlipResult(
         condition_tag=condition_tag,

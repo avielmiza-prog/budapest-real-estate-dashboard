@@ -68,3 +68,10 @@ def test_fallback_benchmark_lowers_confidence():
 def test_discount_uses_same_condition_median():
     r = _eval(price_huf=50_000_000.0)  # 1.0M/sqm vs raw median 1.1M -> ~9% below
     assert r.discount_vs_market_percent == pytest.approx((1_100_000 - 1_000_000) / 1_100_000 * 100)
+
+
+def test_huge_property_is_never_a_confident_buy():
+    r = _eval(size_sqm=400.0, price_huf=200_000_000.0)
+    assert r.verdict != "buy"
+    assert "unusual_size" in r.confidence_reasons
+    assert r.confidence == "low"

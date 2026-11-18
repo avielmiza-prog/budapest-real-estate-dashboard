@@ -67,6 +67,7 @@ const TEXT = {
     reason_no_condition: "The ad doesn't state the condition; average condition assumed",
     reason_no_building_type: "Building type (brick / panel) unknown",
     reason_above_renovated_market: "Asking price per m² is already above the renovated market price",
+    reason_unusual_size: "Unusual size (under 18 or over 150 m²): probably a house or a whole building, check by hand",
   },
   ru: {
     tabBuy: "Стоит покупать",
@@ -126,6 +127,7 @@ const TEXT = {
     reason_no_condition: "В объявлении не указано состояние; принято среднее",
     reason_no_building_type: "Тип дома (кирпич / панель) неизвестен",
     reason_above_renovated_market: "Цена за м² уже выше, чем у квартир с ремонтом",
+    reason_unusual_size: "Необычный размер (меньше 18 или больше 150 м²): вероятно, дом или целое здание, проверить вручную",
   },
 } as const;
 

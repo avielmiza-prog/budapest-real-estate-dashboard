@@ -14,7 +14,7 @@ const SCOPE_KEY: Record<FlipResult["scope"], FlipTextKey> = {
   none: "scopeNone",
 };
 
-const REASON_KEYS = ["fallback_benchmark", "no_condition", "no_building_type", "above_renovated_market"];
+const REASON_KEYS = ["fallback_benchmark", "no_condition", "no_building_type", "above_renovated_market", "unusual_size"];
 
 /** Line-by-line flip math from backend/app/flip_model.py, readable top to bottom. */
 export function FlipBreakdown({
