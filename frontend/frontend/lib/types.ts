@@ -152,6 +152,42 @@ export interface Deal {
   deal_score_band: DealScoreBand | null;
   underwriting: Underwriting | null;
   scenarios: Scenarios | null;
+  // Freshness + realistic flip verdict (backend/app/flip_model.py)
+  last_seen_at?: string | null;
+  is_stale?: boolean;
+  previous_price_huf?: number | null;
+  price_drop_percent?: number | null;
+  flip?: FlipResult | null;
+}
+
+export type Verdict = "buy" | "consider" | "skip";
+
+export interface FlipResult {
+  condition_tag: string;
+  scope: "full" | "medium" | "refresh" | "none";
+  usable_area_sqm: number;
+  purchase_price_huf: number;
+  purchase_costs_huf: number;
+  renovation_cost_huf: number;
+  contingency_huf: number;
+  holding_months: number;
+  holding_cost_huf: number;
+  total_cash_needed_huf: number;
+  exit_price_sqm_huf: number;
+  exit_price_huf: number;
+  sale_costs_huf: number;
+  profit_before_tax_huf: number;
+  gains_tax_huf: number;
+  net_profit_huf: number;
+  roi_percent: number;
+  annualized_roi_percent: number;
+  max_offer_price_huf: number | null;
+  offer_gap_percent: number | null;
+  discount_vs_market_percent: number | null;
+  verdict: Verdict;
+  confidence: "high" | "medium" | "low";
+  confidence_reasons: string[];
+  exit_basis: string;
 }
 
 export interface TopUndervaluedDeal {
@@ -172,12 +208,22 @@ export interface DashboardStats {
   top_undervalued: TopUndervaluedDeal[];
   is_today_only: boolean;
   today_new_listings: number;
+  verdict_counts?: Record<Verdict, number>;
+  last_scan_at?: string | null;
   computed_at: string;
 }
 
 // Mirrors app/dashboard.py's SORT_OPTIONS — kept in this exact order since
 // the sort dropdown renders options in this order.
-export type SortOption = "newest" | "price_desc" | "price_asc" | "score_desc" | "roi_desc" | "sqm_asc" | "roi_score_desc";
+export type SortOption =
+  | "newest"
+  | "price_desc"
+  | "price_asc"
+  | "score_desc"
+  | "roi_desc"
+  | "sqm_asc"
+  | "roi_score_desc"
+  | "profit_desc";
 
 export const SORT_OPTIONS: SortOption[] = [
   "roi_score_desc",
@@ -187,6 +233,7 @@ export const SORT_OPTIONS: SortOption[] = [
   "score_desc",
   "roi_desc",
   "sqm_asc",
+  "profit_desc",
 ];
 
 // Default sort: strict Net ROI (underwriting flip_roi_percent) descending,
@@ -201,6 +248,7 @@ export const DEFAULT_MIN_ROI_PERCENT = 10;
 
 export const SORT_OPTION_LABELS: Record<SortOption, string> = {
   roi_score_desc: "Highest ROI / Best Deal Score",
+  profit_desc: "Highest net profit",
   newest: "Newest Added",
   price_desc: "Price: High to Low",
   price_asc: "Price: Low to High",
@@ -222,6 +270,7 @@ export interface DealFilters {
   favoritesOnly: boolean;
   pipelineStatus: PipelineStatus | null; // null means "all statuses"
   sortBy: SortOption;
+  verdict: "buy" | "consider" | "all"; // "consider" tab shows buy + consider
 }
 
 // Also doubles as "Clear filters" — clearing resets to the platform's
@@ -230,7 +279,9 @@ export interface DealFilters {
 // about what's actually being shown).
 export const EMPTY_FILTERS: DealFilters = {
   districts: [],
-  minRoi: DEFAULT_MIN_ROI_PERCENT,
+  // No ROI slider default any more: the verdict tabs (buy / worth
+  // negotiating / all) do that job, using the after-tax flip model.
+  minRoi: null,
   minSize: null,
   maxSize: null,
   minPrice: null,
@@ -241,9 +292,10 @@ export const EMPTY_FILTERS: DealFilters = {
   favoritesOnly: false,
   pipelineStatus: null,
   sortBy: DEFAULT_SORT,
+  verdict: "consider",
 };
 
-export type ViewMode = "table" | "card" | "split";
+export type ViewMode = "simple" | "table" | "card" | "split";
 
 export interface DistrictBenchmark {
   district_number: number;

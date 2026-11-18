@@ -57,7 +57,7 @@ def main() -> int:
         "(see scraper/agent/orchestrator.py — human-like behavior, per-portal fault isolation).",
     )
     parser.add_argument("--max-listings", type=int, default=150, help="Stop after this many listings.")
-    parser.add_argument("--max-pages", type=int, default=9, help="Stop after this many search-result pages.")
+    parser.add_argument("--max-pages", type=int, default=20, help="Stop after this many search-result pages.")
     parser.add_argument("--min-delay", type=float, default=1.5, help="Minimum seconds between requests.")
     parser.add_argument("--max-delay", type=float, default=3.5, help="Maximum seconds between requests.")
     parser.add_argument("--eur-huf-rate", type=float, default=DEFAULT_EUR_HUF_RATE, help="EUR->HUF rate for renovation cost math.")
@@ -118,6 +118,19 @@ def main() -> int:
             eur_huf_rate=args.eur_huf_rate,
             ignore_robots=args.ignore_robots,
         )
+
+    if args.agent:
+        # Same post-scan step the server's Scan button runs: refresh the
+        # district medians from the freshly scanned listings.
+        from app.database import SessionLocal
+        from app.services import stats_service
+
+        db = SessionLocal()
+        try:
+            stats_service.update_district_benchmarks(db)
+            stats_service.update_building_type_benchmarks(db)
+        finally:
+            db.close()
 
     stored = [r for r in results if r.stored]
     print(json.dumps([r.to_dict() for r in results], indent=2, ensure_ascii=False))

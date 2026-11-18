@@ -121,6 +121,7 @@ def test_no_benchmark_still_reports_cost_side():
 
 
 def test_full_underwriting_math_and_formulas():
+    """Scan-time verdict must equal app.flip_model's realistic numbers (hand-checked below)."""
     db = SessionLocal()
     try:
         _make_benchmark(db, district_number=7, renovated=1_500_000.0, rent=5000.0)
@@ -128,28 +129,25 @@ def test_full_underwriting_math_and_formulas():
 
         result = va.validate_and_underwrite(prop, db)
 
-        renovation_cost = 50.0 * 120_000  # 6,000,000
-        acquisition_tax = 40_000_000.0 * 0.04  # 1,600,000
-        legal_closing = 40_000_000.0 * 0.015  # 600,000
-        total_investment = 40_000_000.0 + renovation_cost + acquisition_tax + legal_closing
-        assert result.renovation_cost_huf == pytest.approx(renovation_cost)
-        assert result.total_investment_huf == pytest.approx(total_investment)
+        # Average condition -> medium scope: 170k HUF/sqm + 15% contingency, 7 holding months.
+        renovation = 50 * 170_000 * 1.15  # 9,775,000
+        purchase_costs = 40_000_000 * 0.055  # 2,200,000
+        holding = 7 * (450 * 50 + 25_000)  # 332,500
+        total_cash = 40_000_000 + purchase_costs + renovation + holding
+        exit_price = 50 * 1_500_000 * 0.95  # asking-to-sale discount
+        sale_costs = exit_price * 0.03
+        taxable_gain = exit_price - sale_costs - (total_cash - holding)
+        net_profit = exit_price - sale_costs - total_cash - 0.15 * taxable_gain
 
-        exit_price = 50.0 * 1_500_000.0  # 75,000,000
-        broker_fee = exit_price * 0.03
-        net_profit = exit_price - total_investment - broker_fee
+        assert result.renovation_cost_huf == pytest.approx(renovation)
+        assert result.total_investment_huf == pytest.approx(total_cash)
         assert result.estimated_market_value_huf == pytest.approx(exit_price)
         assert result.net_profit_huf == pytest.approx(net_profit)
-
-        expected_roi = net_profit / total_investment * 100
-        assert result.flip_roi_percent == pytest.approx(expected_roi, abs=0.01)
+        assert result.flip_roi_percent == pytest.approx(net_profit / total_cash * 100, abs=0.01)
 
         annual_rent = 5000.0 * 50.0 * 12
-        expected_yield = annual_rent / total_investment * 100
-        assert result.rental_yield_percent == pytest.approx(expected_yield, abs=0.01)
-
+        assert result.rental_yield_percent == pytest.approx(annual_rent / total_cash * 100, abs=0.01)
         assert result.deal_score is not None and 0 <= result.deal_score <= 100
-        # asking price/sqm (800,000) is well below the district's turnkey median (1,500,000) -> not overpriced
         assert "overpriced" not in result.status
     finally:
         db.close()

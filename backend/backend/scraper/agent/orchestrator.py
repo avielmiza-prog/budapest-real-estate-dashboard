@@ -34,9 +34,10 @@ operator put up and explicitly asked crawlers not to cross — this project
 only automates portals that allow it, not portals that have said no.
 """
 import logging
+import os
 from typing import Dict, List, Optional
 
-from app import analyzer, models
+from app import analyzer, crud, models
 from app.database import SessionLocal, init_db
 from app.services import valuation_agent
 from scraper import playwright_runtime
@@ -114,9 +115,23 @@ class _LazyBrowser:
         self._close_playwright_cm()
 
 
+def browser_allowed() -> bool:
+    """
+    Chromium needs ~300-500MB RAM. On a free 512MB web server (Render) a
+    launch inside the API process gets it OOM-killed, which is what froze the
+    whole site during scans. So: no browser on Render unless explicitly
+    allowed; the full scan runs from GitHub Actions instead (see
+    .github/workflows/scan.yml), where memory is not shared with the API.
+    """
+    explicit = os.getenv("SCRAPER_ALLOW_BROWSER")
+    if explicit is not None:
+        return explicit.lower() in ("1", "true", "yes")
+    return not os.getenv("RENDER")
+
+
 def run_agent(
     max_listings: int = 150,
-    max_pages: int = 9,
+    max_pages: int = 20,
     delay_range: tuple = (1.5, 3.5),
     headless: bool = True,
     eur_huf_rate: float = analyzer.DEFAULT_EUR_HUF_RATE,
@@ -137,16 +152,24 @@ def run_agent(
         raise ValueError(f"Unknown portal(s) requested for agent run: {unknown}. Valid: {sorted(PORTALS)}")
 
     results: List[ScrapeResult] = []
+    known_all: set = set()
     lazy_browser = _LazyBrowser(headless=headless)
 
     try:
         for portal_name in names:
-            remaining = max_listings - sum(1 for r in results if r.stored)
+            # Budget counts NEW listings only; re-stored known ones are free.
+            remaining = max_listings - sum(1 for r in results if r.stored and r.url not in known_all)
             if remaining <= 0:
                 logger.info("[agent] reached max_listings=%d — stopping before portal %s", max_listings, portal_name)
                 break
 
             scraper = get_scraper(portal_name)
+            known_db = SessionLocal()
+            try:
+                scraper.known_urls = frozenset(crud.recently_seen_urls(known_db, scraper.portal_name))
+                known_all.update(scraper.known_urls)
+            finally:
+                known_db.close()
             logger.info("[agent] starting portal %s (remaining budget: %d)", portal_name, remaining)
 
             raws = try_http_fetch(scraper, remaining, max_pages, ignore_robots)
@@ -155,7 +178,7 @@ def run_agent(
                     store_and_analyze(raw, scraper.portal_name, raw.url, eur_huf_rate) for raw in raws
                 ]
             else:
-                browser = lazy_browser.get()
+                browser = lazy_browser.get() if browser_allowed() else None
                 if browser is None:
                     logger.warning("[agent] portal %s needs a browser but none is available — skipping", portal_name)
                     continue
@@ -173,6 +196,14 @@ def run_agent(
                 except Exception as e:  # noqa: BLE001 - one portal's total failure must not sink the agent run
                     logger.warning("[agent] portal %s failed entirely, skipping: %s: %s", portal_name, type(e).__name__, e)
                     continue
+
+            if scraper.seen_known_urls:
+                touch_db = SessionLocal()
+                try:
+                    touched = crud.touch_last_seen(touch_db, scraper.seen_known_urls)
+                    logger.info("[agent] portal %s: %d known listing(s) still live (last_seen_at bumped)", portal_name, touched)
+                finally:
+                    touch_db.close()
 
             stored = sum(1 for r in portal_results if r.stored)
             logger.info("[agent] portal %s done: %d/%d stored", portal_name, stored, len(portal_results))

@@ -56,6 +56,18 @@ class BaseScraper(ABC):
     # unnecessary — faster, and far fewer requests against the target site.
     supports_bulk_extraction: bool = False
 
+    # Set by the orchestrator before a run: URLs already stored and seen
+    # recently, whose detail pages don't need re-fetching. Listings found on
+    # search pages that are in this set get appended to seen_known_urls so
+    # their last_seen_at can be bumped in one bulk UPDATE.
+    known_urls: frozenset = frozenset()
+
+    @property
+    def seen_known_urls(self) -> list:
+        if not hasattr(self, "_seen_known_urls"):
+            self._seen_known_urls = []
+        return self._seen_known_urls
+
     # Set True (and implement fetch_via_http) when a portal's listing data
     # is present in the plain server-rendered HTML — no browser/JS needed at
     # all. scraper/agent/orchestrator.py tries this first and only falls

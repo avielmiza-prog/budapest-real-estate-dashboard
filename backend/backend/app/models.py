@@ -46,7 +46,19 @@ class Property(Base):
     is_favorite = Column(Boolean, nullable=False, default=False)
     pipeline_status = Column(String(30), nullable=False, default="new")
     notes = Column(Text, nullable=True)  # free-text investor notes on a shortlisted deal, editable via PATCH
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False, index=True)
+
+    # Freshness tracking. last_seen_at is bumped every time a scan sees the
+    # listing on a portal's search results (even when its detail page is
+    # not re-fetched). A listing not seen for app.dashboard.STALE_AFTER_DAYS
+    # is treated as sold/withdrawn and hidden from the deals list.
+    # Nullable on purpose: rows created before this column existed fall
+    # back to created_at.
+    last_seen_at = Column(DateTime, nullable=True, index=True)
+    # Previous asking price, kept when a re-scan finds a different price, so
+    # the UI can show "price dropped 8%" (a strong negotiation signal).
+    previous_price_huf = Column(Float, nullable=True)
+    price_changed_at = Column(DateTime, nullable=True)
 
     # Sub-market precision fields — extracted from listing text by
     # app/building_classifier.py and app/sub_district.py (see their

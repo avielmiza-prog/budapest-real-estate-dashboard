@@ -88,6 +88,9 @@ class PropertyOut(PropertyBase):
 
     id: int
     created_at: datetime.datetime
+    last_seen_at: Optional[datetime.datetime] = None
+    previous_price_huf: Optional[float] = None
+    price_changed_at: Optional[datetime.datetime] = None
 
     # Read-only — set by app/services/valuation_agent.py, never by a client.
     # Not present on PropertyCreate/PropertyUpdate above, deliberately.

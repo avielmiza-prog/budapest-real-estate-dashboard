@@ -190,6 +190,7 @@ class JofogasScraper(BaseScraper):
 
         raws: List[RawListing] = []
         seen_urls = set()
+        new_count = 0
         for page_number in range(1, max_pages + 1):
             search_url = self.build_search_url(page_number)
             if not ignore_robots:
@@ -211,8 +212,13 @@ class JofogasScraper(BaseScraper):
                 if raw.url in seen_urls:
                     continue
                 seen_urls.add(raw.url)
+                # Search pages already carry every field, so known listings
+                # are re-stored too (cheap, and catches price changes), but
+                # only NEW listings count against the budget.
                 raws.append(raw)
-                if len(raws) >= max_listings:
+                if raw.url not in self.known_urls:
+                    new_count += 1
+                if new_count >= max_listings:
                     return raws
 
             pager = ad_list.get("pager", {}) or {}

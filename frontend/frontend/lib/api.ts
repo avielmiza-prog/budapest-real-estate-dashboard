@@ -66,6 +66,29 @@ async function getJson<T>(path: string, params: Record<string, string | number |
   return response.json() as Promise<T>;
 }
 
+async function getJsonWithHeaders<T>(
+  path: string,
+  params: Record<string, string | number | boolean | null | undefined> = {}
+): Promise<{ data: T; headers: Headers }> {
+  const url = new URL(path, API_BASE_URL);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), { cache: "no-store", headers: passcodeHeaders() });
+  } catch {
+    throw new ApiError(`Could not reach the API at ${API_BASE_URL}.`, 0);
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new ApiError(detail || `Request to ${path} failed with status ${response.status}`, response.status);
+  }
+  return { data: (await response.json()) as T, headers: response.headers };
+}
+
 async function postJson<T>(path: string, params: Record<string, string | number | boolean | null | undefined> = {}): Promise<T> {
   const url = new URL(path, API_BASE_URL);
   for (const [key, value] of Object.entries(params)) {
@@ -123,12 +146,33 @@ function dealFiltersToParams(
     pipeline_status: filters.pipelineStatus,
     eur_huf_rate: eurHufRate,
     sort: filters.sortBy,
+    verdict: filters.verdict === "buy" ? "buy" : filters.verdict === "consider" ? "buy,consider" : null,
+    // The backend no longer applies a hidden 10% hurdle; send an explicit
+    // "no hurdle" so older backends don't silently hide listings either.
+    min_flip_roi: -1000,
   };
 }
 
-export function getDeals(filters: DealFilters, eurHufRate: number): Promise<Deal[]> {
-  // No `limit` — omitting it returns every relevant listing (see app/dashboard.py).
-  return getJson<Deal[]>("/deals", dealFiltersToParams(filters, eurHufRate));
+export const DEALS_PAGE_SIZE = 40;
+
+/**
+ * One page of deals plus the total number matching (X-Total-Count).
+ * Paging matters: rendering thousands of rows at once froze the browser,
+ * especially on a phone.
+ */
+export async function getDeals(
+  filters: DealFilters,
+  eurHufRate: number,
+  skip = 0,
+  limit = DEALS_PAGE_SIZE
+): Promise<{ deals: Deal[]; total: number }> {
+  const { data, headers } = await getJsonWithHeaders<Deal[]>("/deals", {
+    ...dealFiltersToParams(filters, eurHufRate),
+    skip,
+    limit,
+  });
+  const total = Number(headers.get("X-Total-Count"));
+  return { deals: data, total: Number.isFinite(total) && total > 0 ? total : skip + data.length };
 }
 
 /**

@@ -58,7 +58,11 @@ OPTIMISTIC_PERCENTILE = 85
 
 SEED_DATA_PATH = Path(__file__).resolve().parent.parent.parent / "seed_data.json"
 
-_RENOVATED_TAGS = {CONDITION_RENOVATED, CONDITION_NEW_CONSTRUCTION}
+# New builds are deliberately NOT part of the renovated benchmark: in 2026
+# Budapest they sell ~30-60% above renovated second-hand flats, and a
+# renovated flip competes with renovated used flats, not with new builds.
+# Mixing them in inflated every projected exit price.
+_RENOVATED_TAGS = {CONDITION_RENOVATED}
 
 _baseline_cache: Optional[Dict[int, dict]] = None
 
@@ -87,9 +91,24 @@ def _load_baseline_benchmarks() -> Dict[int, dict]:
     return baseline
 
 
-def _condition_category(condition_text: Optional[str]) -> str:
-    """'renovated' or 'raw' — the two buckets DistrictBenchmark tracks."""
-    return "renovated" if classify_condition_tag(condition_text) in _RENOVATED_TAGS else "raw"
+def _condition_category(condition_text: Optional[str]) -> Optional[str]:
+    """'renovated', 'raw', or None for new builds (excluded from both buckets)."""
+    tag = classify_condition_tag(condition_text)
+    if tag == CONDITION_NEW_CONSTRUCTION:
+        return None
+    return "renovated" if tag in _RENOVATED_TAGS else "raw"
+
+
+def _recent_listings_query(db: Session):
+    """Listings seen on a portal within the rolling window (last_seen_at, falling back to created_at)."""
+    from sqlalchemy import func
+
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=ROLLING_WINDOW_DAYS)
+    return (
+        db.query(models.Property)
+        .filter(models.Property.price_per_sqm.isnot(None))
+        .filter(func.coalesce(models.Property.last_seen_at, models.Property.created_at) >= cutoff)
+    )
 
 
 def _trimmed_median(values: List[float]) -> Optional[float]:
@@ -122,13 +141,7 @@ def update_district_benchmarks(db: Session) -> int:
 
     Returns the number of districts actually touched (created or updated).
     """
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=ROLLING_WINDOW_DAYS)
-    properties = (
-        db.query(models.Property)
-        .filter(models.Property.price_per_sqm.isnot(None))
-        .filter(models.Property.created_at >= cutoff)
-        .all()
-    )
+    properties = _recent_listings_query(db).all()
 
     # (district_number, category) -> [price_per_sqm, ...]
     groups: Dict[Tuple[int, str], List[float]] = {}
@@ -138,6 +151,8 @@ def update_district_benchmarks(db: Session) -> int:
         except ValueError:
             continue  # unparseable/missing district — can't attribute this listing to a benchmark row
         category = _condition_category(prop.condition)
+        if category is None:
+            continue
         groups.setdefault((district_number, category), []).append(prop.price_per_sqm)
 
     baseline = _load_baseline_benchmarks()
@@ -221,14 +236,7 @@ def update_building_type_benchmarks(db: Session) -> int:
 
     Returns the number of (district, building_type) rows actually touched.
     """
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=ROLLING_WINDOW_DAYS)
-    properties = (
-        db.query(models.Property)
-        .filter(models.Property.price_per_sqm.isnot(None))
-        .filter(models.Property.building_type.isnot(None))
-        .filter(models.Property.created_at >= cutoff)
-        .all()
-    )
+    properties = _recent_listings_query(db).filter(models.Property.building_type.isnot(None)).all()
 
     groups: Dict[Tuple[int, str], List[float]] = {}
     for prop in properties:

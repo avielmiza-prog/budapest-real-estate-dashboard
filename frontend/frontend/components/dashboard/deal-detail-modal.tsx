@@ -48,6 +48,8 @@ import { SCENARIO_LABELS, SCENARIO_NAMES, type Currency, type Deal, type Renovat
 import { ConditionBadge } from "./condition-badge";
 import { DealMicroBadges } from "./deal-micro-badges";
 import { DealScoreBadge } from "./deal-score-badge";
+import { FlipBreakdown } from "./flip-breakdown";
+import { useFlipText } from "@/lib/flip-text";
 import { FavoriteToggle, NotesEditor, PipelineStatusSelect } from "./deal-actions";
 import { ImageLightbox } from "./image-lightbox";
 import { RoiBadge } from "./roi-badge";
@@ -655,6 +657,7 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
   const sourceUrl = deal ? getSourceListingUrl(deal) : null;
   const isMock = deal ? isMockListingUrl(deal.source_url ?? deal.url) : false;
   const [customCostInput, setCustomCostInput] = useState<string>("");
+  const advancedLabel = useFlipText()("advanced");
   const customCostEurSqm = customCostInput.trim() === "" ? null : Number(customCostInput);
 
   // Reset the custom-cost input when a different deal is opened in the same modal instance.
@@ -725,6 +728,12 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
 
             <PhotoGallery images={deal.images ?? []} title={deal.title} />
 
+            {deal.flip && <FlipBreakdown flip={deal.flip} currency={currency} eurHufRate={eurHufRate} />}
+
+            <details className="group rounded-lg border p-4 [&_summary]:cursor-pointer">
+              <summary className="text-sm font-semibold">{advancedLabel}</summary>
+              <div className="mt-4 flex flex-col gap-6">
+
             <div className="grid gap-6 sm:grid-cols-2">
               <div>
                 <h4 className="mb-2 text-sm font-semibold">Asking price vs. district benchmark</h4>
@@ -791,7 +800,8 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
               <ScenarioSection deal={deal} currency={currency} eurHufRate={eurHufRate} />
             </div>
 
-            <Separator />
+              </div>
+            </details>
 
             <NotesEditor deal={deal} onUpdated={onDealUpdated} />
           </>

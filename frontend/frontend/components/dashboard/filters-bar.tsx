@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, LayoutGrid, MapPinned, RotateCcw, TableIcon } from "lucide-react";
+import { Download, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,8 +40,10 @@ import { DistrictMultiSelect } from "./district-multiselect";
 interface FiltersBarProps {
   filters: DealFilters;
   onFiltersChange: (filters: DealFilters) => void;
-  view: ViewMode;
-  onViewChange: (view: ViewMode) => void;
+  // The view switcher moved to the dashboard header row; kept optional so
+  // existing callers still type-check.
+  view?: ViewMode;
+  onViewChange?: (view: ViewMode) => void;
   currency: Currency;
   eurHufRate: number;
 }
@@ -52,7 +54,7 @@ function numberOrNull(value: string): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-export function FiltersBar({ filters, onFiltersChange, view, onViewChange, currency, eurHufRate }: FiltersBarProps) {
+export function FiltersBar({ filters, onFiltersChange, currency, eurHufRate }: FiltersBarProps) {
   const update = (patch: Partial<DealFilters>) => onFiltersChange({ ...filters, ...patch });
 
   const sizeRange: [number, number] = [
@@ -244,7 +246,7 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => onFiltersChange(EMPTY_FILTERS)} className="shrink-0">
+          <Button variant="ghost" size="sm" onClick={() => onFiltersChange({ ...EMPTY_FILTERS, verdict: filters.verdict })} className="shrink-0">
             <RotateCcw />
             Reset
           </Button>
@@ -269,22 +271,6 @@ export function FiltersBar({ filters, onFiltersChange, view, onViewChange, curre
             </SelectContent>
           </Select>
 
-          <Tabs value={view} onValueChange={(v) => onViewChange(v as ViewMode)}>
-            <TabsList>
-              <TabsTrigger value="table">
-                <TableIcon className="mr-1 h-4 w-4" />
-                Table
-              </TabsTrigger>
-              <TabsTrigger value="card">
-                <LayoutGrid className="mr-1 h-4 w-4" />
-                Cards
-              </TabsTrigger>
-              <TabsTrigger value="split">
-                <MapPinned className="mr-1 h-4 w-4" />
-                Split
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
         </div>
       </div>
     </div>

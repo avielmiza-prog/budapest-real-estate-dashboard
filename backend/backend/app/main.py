@@ -104,6 +104,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
 # Added after CORS so CORS stays the outer layer — a 401 from the passcode
 # gate still carries CORS headers, instead of the browser reporting it as an
@@ -458,8 +459,9 @@ def property_investment_memo(
     except ValueError:
         pass
 
-    _analysis_dict, best_tier, _discount, score = dashboard.compute_live_deal_metrics(db, prop, eur_huf_rate)
-    underwriting = dashboard.build_underwriting_dict(prop, best_tier, score)
+    cache = dashboard.BenchmarkCache(db)
+    _analysis_dict, best_tier, _discount, score = dashboard.compute_live_deal_metrics(db, prop, eur_huf_rate, cache)
+    underwriting = dashboard.build_underwriting_dict(prop, best_tier, score, dashboard.compute_flip(prop, cache))
 
     pdf_bytes = investment_memo.generate_investment_memo_pdf(
         prop, benchmark=benchmark, eur_huf_rate=eur_huf_rate, underwriting=underwriting
@@ -532,6 +534,9 @@ def list_deals(
     ),
     skip: int = 0,
     limit: Optional[int] = Query(default=None, ge=1, le=5000, description="Omit for every matching listing."),
+    verdict: Optional[str] = Query(default=None, description="Comma-separated: buy,consider,skip"),
+    include_stale: bool = Query(default=False, description="Include listings not seen on any portal for 21+ days."),
+    response: Response = None,
     db: Session = Depends(get_db),
 ):
     """
@@ -547,7 +552,7 @@ def list_deals(
         raise HTTPException(
             status_code=422, detail=f"pipeline_status must be one of {models.PIPELINE_STATUSES}, got {pipeline_status!r}"
         )
-    return dashboard.list_deals(
+    result = dashboard.list_deals(
         db,
         districts=_parse_districts(district),
         min_roi=min_roi,
@@ -565,7 +570,14 @@ def list_deals(
         sort_by=sort,
         skip=skip,
         limit=limit,
+        verdicts=[v.strip() for v in verdict.split(",") if v.strip()] if verdict else None,
+        include_stale=include_stale,
+        with_total=True,
     )
+    deals, total = result
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return deals
 
 
 @app.get("/deals/export.csv", tags=["dashboard"])

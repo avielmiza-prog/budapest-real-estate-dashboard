@@ -60,7 +60,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app import analyzer, crud, models
+from app import analyzer, crud, flip_model, models
 from app.analyzer import BROKER_FEE_RATE, LEGAL_NOTARY_FEE_RATE as LEGAL_CLOSING_RATE, PROPERTY_TRANSFER_TAX_RATE as ACQUISITION_TAX_RATE
 from app.renovation_estimator import estimate_adjusted_renovation_cost_huf_per_sqm
 
@@ -164,23 +164,19 @@ def validate_and_underwrite(prop: models.Property, db: Session) -> UnderwritingR
     if not prop.size_sqm or prop.size_sqm <= 0 or not prop.price_huf or prop.price_huf <= 0:
         return UnderwritingResult(None, None, None, None, None, None, None, "insufficient_data", None)
 
-    reno_cost_per_sqm = estimate_adjusted_renovation_cost_huf_per_sqm(
-        prop.condition, prop.building_type, prop.ceiling_height_m
-    )
-    renovation_cost_huf = reno_cost_per_sqm * prop.size_sqm
-
-    acquisition_tax_huf = prop.price_huf * ACQUISITION_TAX_RATE
-    legal_closing_huf = prop.price_huf * LEGAL_CLOSING_RATE
-    total_investment_huf = prop.price_huf + renovation_cost_huf + acquisition_tax_huf + legal_closing_huf
-
     benchmark: Optional[models.DistrictBenchmark] = None
     try:
         district_number = analyzer.parse_district_number(prop.district)
         benchmark = crud.get_district_benchmark(db, district_number)
     except ValueError:
-        pass  # unparseable district — fall through with benchmark=None
+        district_number = None
 
     if benchmark is None or benchmark.avg_price_sqm_renovated is None:
+        reno_cost_per_sqm = estimate_adjusted_renovation_cost_huf_per_sqm(
+            prop.condition, prop.building_type, prop.ceiling_height_m
+        )
+        renovation_cost_huf = reno_cost_per_sqm * prop.size_sqm
+        total_investment_huf = prop.price_huf * (1 + ACQUISITION_TAX_RATE + LEGAL_CLOSING_RATE) + renovation_cost_huf
         return UnderwritingResult(
             estimated_market_value_huf=None,
             renovation_cost_huf=round(renovation_cost_huf, 2),
@@ -193,33 +189,54 @@ def validate_and_underwrite(prop: models.Property, db: Session) -> UnderwritingR
             confidence_tag=None,
         )
 
-    exit_price_huf = prop.size_sqm * benchmark.avg_price_sqm_renovated
-    broker_fee_huf = exit_price_huf * BROKER_FEE_RATE
-    net_profit_huf = exit_price_huf - total_investment_huf - broker_fee_huf
-    flip_roi_percent = (net_profit_huf / total_investment_huf * 100) if total_investment_huf > 0 else None
+    # Same realistic model the dashboard uses (app.flip_model), so the
+    # scan log, the persisted verdict and the UI never disagree.
+    bt = None
+    if prop.building_type and district_number is not None:
+        bt = (
+            db.query(models.BuildingTypeBenchmark)
+            .filter_by(district_number=district_number, building_type=prop.building_type)
+            .first()
+        )
+    flip = flip_model.evaluate_flip(
+        size_sqm=prop.size_sqm,
+        price_huf=prop.price_huf,
+        condition=prop.condition,
+        district_renovated_median_sqm=benchmark.avg_price_sqm_renovated,
+        district_raw_median_sqm=benchmark.avg_price_sqm_raw,
+        balcony_sqm=prop.balcony_sqm,
+        building_type=prop.building_type,
+        ceiling_height_m=prop.ceiling_height_m,
+        building_type_median_sqm=bt.avg_price_sqm if bt else None,
+        building_type_samples=bt.sample_count if bt else 0,
+        renovated_sample_count=benchmark.sample_count_renovated,
+        renovated_source=benchmark.source_renovated,
+    )
+    exit_price_huf = flip.exit_price_huf
+    renovation_cost_huf = flip.renovation_cost_huf + flip.contingency_huf
+    total_investment_huf = flip.total_cash_needed_huf
+    net_profit_huf = flip.net_profit_huf
+    flip_roi_percent = flip.roi_percent
 
     rental_yield_percent = None
     if benchmark.avg_rent_huf_sqm and total_investment_huf > 0:
         annual_rent_huf = benchmark.avg_rent_huf_sqm * prop.size_sqm * 12
         rental_yield_percent = annual_rent_huf / total_investment_huf * 100
 
-    asking_price_per_sqm = prop.price_huf / prop.size_sqm
-    discount_percent = (
-        (benchmark.avg_price_sqm_renovated - asking_price_per_sqm) / benchmark.avg_price_sqm_renovated * 100
-    )
+    discount_percent = flip.discount_vs_market_percent
 
     liquidity_score = _district_liquidity_score(benchmark)
     deal_score = _compute_deal_score(discount_percent, flip_roi_percent, liquidity_score)
 
     risk_flags = []
-    if discount_percent < 0:  # asking price/sqm is above the district's turnkey median
+    if discount_percent is not None and discount_percent < 0:  # pricier than same-condition flats in the district
         risk_flags.append("overpriced")
     if flip_roi_percent is not None and flip_roi_percent < MIN_HURDLE_ROI_PERCENT:
         risk_flags.append("below_hurdle_roi")
     status = "validated" if not risk_flags else "risk:" + ",".join(risk_flags)
 
     confidence_tag = None
-    if flip_roi_percent is not None and flip_roi_percent >= HIGH_POTENTIAL_FLIP_ROI_PERCENT:
+    if flip.verdict == "buy":
         confidence_tag = "High Potential Flip"
     elif rental_yield_percent is not None and rental_yield_percent >= BUY_AND_HOLD_YIELD_PERCENT:
         confidence_tag = "Buy & Hold Yield"

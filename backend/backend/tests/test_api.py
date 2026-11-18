@@ -252,7 +252,10 @@ def test_property_and_deal_lifecycle():
     assert deal["deal_score"] is not None
     assert deal["analysis"] is not None
     assert deal["underwriting"] is not None
-    assert deal["underwriting"]["deal_score"] == underwriting_result["deal_score"]
+    # The list shows the live score (recomputed on every request from the
+    # current benchmarks), not the scan-time one.
+    assert deal["underwriting"]["deal_score"] == deal["deal_score"]
+    assert deal["flip"] is not None
 
     filtered = client.get("/deals", params={"district": "VII", "pipeline_status": "reviewing"}).json()
     assert any(d["id"] == property_id for d in filtered)

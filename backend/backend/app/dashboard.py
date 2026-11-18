@@ -9,11 +9,11 @@ module is the layer that fans analyzer.py out across many properties.
 import csv
 import datetime
 import io
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from app import analyzer, crud, deal_score as deal_score_module, models
+from app import analyzer, crud, deal_score as deal_score_module, flip_model, models
 from app.condition_classifier import classify_condition_tag
 from app.services import scenario_analysis
 
@@ -31,7 +31,76 @@ from app.services import scenario_analysis
 # shows up, so a fresh scrape isn't hidden before its first underwriting
 # pass. Callers that want the pre-hurdle full market (e.g. an analyst
 # reviewing everything) can pass min_flip_roi=None explicitly.
-DEFAULT_MIN_FLIP_ROI_PERCENT = 10.0
+# No default hurdle: the list shows every active listing, best first, and
+# the UI filters by verdict. Hiding sub-10% deals by default made the
+# dashboard look empty and hid listings that become deals after negotiation.
+DEFAULT_MIN_FLIP_ROI_PERCENT = None
+
+
+STALE_AFTER_DAYS = 21  # not seen on any portal for this long -> treated as sold/withdrawn
+
+
+def _last_seen(prop: models.Property) -> Optional[datetime.datetime]:
+    return prop.last_seen_at or prop.created_at
+
+
+def is_stale(prop: models.Property, now: Optional[datetime.datetime] = None) -> bool:
+    seen = _last_seen(prop)
+    if seen is None:
+        return False
+    now = now or datetime.datetime.utcnow()
+    return (now - seen).days > STALE_AFTER_DAYS
+
+
+class BenchmarkCache:
+    """
+    Every DistrictBenchmark/BuildingTypeBenchmark row, loaded once per
+    request. The old code ran 4 DB queries per listing (property re-fetch +
+    3 benchmark lookups); against a cloud Postgres that is minutes for a
+    few thousand listings, which is what made the dashboard hang.
+    """
+
+    def __init__(self, db: Session):
+        self.districts: Dict[int, models.DistrictBenchmark] = {
+            b.district_number: b for b in db.query(models.DistrictBenchmark).all()
+        }
+        self.building_types: Dict[tuple, models.BuildingTypeBenchmark] = {
+            (b.district_number, b.building_type): b for b in db.query(models.BuildingTypeBenchmark).all()
+        }
+        self._district_all: Dict[int, Optional[float]] = {}
+        self._parsed: Dict[str, Optional[int]] = {}
+
+    def district_number(self, district: Optional[str]) -> Optional[int]:
+        key = district or ""
+        if key not in self._parsed:
+            try:
+                self._parsed[key] = analyzer.parse_district_number(key)
+            except ValueError:
+                self._parsed[key] = None
+        return self._parsed[key]
+
+    def district(self, district: Optional[str]) -> Optional[models.DistrictBenchmark]:
+        number = self.district_number(district)
+        return self.districts.get(number) if number is not None else None
+
+    def building_type(self, district: Optional[str], building_type: Optional[str]):
+        number = self.district_number(district)
+        if number is None or not building_type:
+            return None
+        return self.building_types.get((number, building_type))
+
+    def district_all_median(self, district: Optional[str]) -> Optional[float]:
+        """Sample-weighted median HUF/sqm across all building types in the district."""
+        number = self.district_number(district)
+        if number is None:
+            return None
+        if number not in self._district_all:
+            rows = [b for (n, _), b in self.building_types.items() if n == number and b.avg_price_sqm and b.sample_count]
+            total = sum(b.sample_count for b in rows)
+            self._district_all[number] = (
+                sum(b.avg_price_sqm * b.sample_count for b in rows) / total if total else None
+            )
+        return self._district_all[number]
 
 
 def _district_benchmark_or_none(db: Session, district: str) -> Optional[models.DistrictBenchmark]:
@@ -44,20 +113,17 @@ def _district_benchmark_or_none(db: Session, district: str) -> Optional[models.D
 
 def _reference_price_sqm(prop: models.Property, benchmark: models.DistrictBenchmark) -> Optional[float]:
     """
-    Which benchmark column to compare a property's price/sqm against depends
-    on its own condition: an already-renovated listing should be judged
-    against avg_price_sqm_renovated, everything else (raw/unknown/needs-work)
-    against avg_price_sqm_raw, falling back to whichever one is populated if
-    only one of the two is.
+    Same-condition benchmark: renovated listings vs. the renovated median,
+    everything else vs. the raw median. Uses the shared condition
+    classifier (the old substring check treated any text containing "új"
+    as renovated).
     """
-    condition = (prop.condition or "").lower()
-    looks_renovated = any(word in condition for word in ("renov", "felújít", "new", "új"))
-
+    tag = classify_condition_tag(prop.condition)
+    looks_renovated = tag in ("Renovated", "New Construction")
     if looks_renovated and benchmark.avg_price_sqm_renovated is not None:
         return benchmark.avg_price_sqm_renovated
     if not looks_renovated and benchmark.avg_price_sqm_raw is not None:
         return benchmark.avg_price_sqm_raw
-    # fall back to whichever exists
     return benchmark.avg_price_sqm_raw if benchmark.avg_price_sqm_raw is not None else benchmark.avg_price_sqm_renovated
 
 
@@ -68,92 +134,142 @@ def _discount_percent(prop: models.Property, benchmark: models.DistrictBenchmark
     return round((reference - prop.price_per_sqm) / reference * 100, 2)
 
 
-def compute_live_deal_metrics(db: Session, prop: models.Property, eur_huf_rate: float) -> tuple:
+def compute_flip(prop: models.Property, cache: BenchmarkCache) -> Optional[flip_model.FlipResult]:
+    """The realistic flip verdict (app.flip_model), or None when size/price/benchmark are missing."""
+    benchmark = cache.district(prop.district)
+    if benchmark is None or not benchmark.avg_price_sqm_renovated or not prop.size_sqm or not prop.price_huf:
+        return None
+    bt = cache.building_type(prop.district, prop.building_type)
+    try:
+        return flip_model.evaluate_flip(
+            size_sqm=prop.size_sqm,
+            price_huf=prop.price_huf,
+            condition=prop.condition,
+            district_renovated_median_sqm=benchmark.avg_price_sqm_renovated,
+            district_raw_median_sqm=benchmark.avg_price_sqm_raw,
+            balcony_sqm=prop.balcony_sqm,
+            building_type=prop.building_type,
+            ceiling_height_m=prop.ceiling_height_m,
+            building_type_median_sqm=bt.avg_price_sqm if bt else None,
+            building_type_samples=bt.sample_count if bt else 0,
+            district_all_median_sqm=cache.district_all_median(prop.district),
+            renovated_sample_count=benchmark.sample_count_renovated,
+            renovated_source=benchmark.source_renovated,
+        )
+    except ValueError:
+        return None
+
+
+def compute_live_deal_metrics(
+    db: Session, prop: models.Property, eur_huf_rate: float, cache: Optional[BenchmarkCache] = None
+) -> tuple:
     """
-    (analysis_dict, best_tier, discount_percent, score) for one property —
-    the live (app.analyzer + app.deal_score) readout shared by list_deals()
-    and app.main's investment-memo route, so both compute this identically.
-    analysis_dict/best_tier are None when there's no benchmark yet or the
-    district/size/price can't be parsed; discount_percent/score degrade
-    gracefully in that case too (see app.deal_score.compute_deal_score).
+    (analysis_dict, best_tier, discount_percent, score) for one property.
+    `analysis_dict` is the interactive Light/Medium/Full breakdown the
+    detail modal's slider uses. `best_tier` is now the tier matching the
+    listing's condition (not the cheapest one), with its ROI replaced by
+    the realistic after-tax flip ROI, so every "ROI" in the app is the
+    same number.
     """
+    cache = cache or BenchmarkCache(db)
+    benchmark = cache.district(prop.district)
     analysis_dict = None
     best_tier = None
-    try:
-        analysis = analyzer.analyze_property_by_id(db, prop.id, eur_huf_rate=eur_huf_rate)
-        analysis_dict = analysis.to_dict()
-        best = analysis.best_tier()
-        best_tier = best.to_dict() if best else None
-    except (LookupError, ValueError):
-        pass  # no benchmark yet, or unparseable district/missing size/price — leave analysis as None
+    if benchmark is not None and benchmark.avg_price_sqm_renovated and prop.size_sqm and prop.price_huf:
+        try:
+            analysis = analyzer.analyze_property(
+                size_sqm=prop.size_sqm,
+                asking_price_huf=prop.price_huf,
+                avg_price_sqm_renovated_huf=benchmark.avg_price_sqm_renovated,
+                district=prop.district,
+                eur_huf_rate=eur_huf_rate,
+                balcony_sqm=prop.balcony_sqm,
+                avg_rent_huf_sqm=benchmark.avg_rent_huf_sqm,
+                district_median_sample_count=benchmark.sample_count_renovated,
+                district_median_source=benchmark.source_renovated,
+            )
+            analysis_dict = analysis.to_dict()
+        except ValueError:
+            analysis_dict = None
 
-    benchmark = _district_benchmark_or_none(db, prop.district)
-    discount_percent = _discount_percent(prop, benchmark) if benchmark else None
+    flip = compute_flip(prop, cache)
+    if analysis_dict and flip is not None:
+        tier_name = {"full": "full", "medium": "medium"}.get(flip.scope, "light")
+        tier = next((t for t in analysis_dict["tiers"] if t["tier"] == tier_name), None)
+        if tier is not None:
+            best_tier = dict(tier)
+            best_tier.update(
+                {
+                    "renovation_cost_huf": round(flip.renovation_cost_huf + flip.contingency_huf, 2),
+                    "total_investment_huf": round(flip.total_cash_needed_huf, 2),
+                    "exit_price_huf": round(flip.exit_price_huf, 2),
+                    "net_profit_huf": round(flip.net_profit_huf, 2),
+                    "roi_percent": round(flip.roi_percent, 2),
+                }
+            )
+
+    discount_percent = (
+        round(flip.discount_vs_market_percent, 2)
+        if flip is not None and flip.discount_vs_market_percent is not None
+        else (_discount_percent(prop, benchmark) if benchmark else None)
+    )
     usable_area_sqm = analysis_dict["usable_area_sqm"] if analysis_dict else prop.size_sqm
     score = deal_score_module.compute_deal_score(
         discount_percent=discount_percent,
-        roi_percent=best_tier["roi_percent"] if best_tier else None,
+        roi_percent=flip.roi_percent if flip else None,
         usable_area_sqm=usable_area_sqm,
         rooms=prop.rooms,
     )
     return analysis_dict, best_tier, discount_percent, score
 
 
-def build_underwriting_dict(prop: models.Property, best_tier: Optional[dict], score: Optional[int]) -> Optional[dict]:
+def build_underwriting_dict(
+    prop: models.Property,
+    best_tier: Optional[dict],
+    score: Optional[int],
+    flip: Optional[flip_model.FlipResult] = None,
+) -> Optional[dict]:
     """
-    The persisted agent verdict (prop.underwriting_*) is the primary source
-    for the numeric fields here, but it's null until a scan has actually
-    underwritten this row (or if the agent hit "no_benchmark"/
-    "insufficient_data"). Whenever a live analysis exists (`best_tier`/
-    `score`, both from app.analyzer + app.deal_score — see list_deals()),
-    backfill from it instead of returning null: the underwriting agent and
-    app.analyzer's best tier are two independently-computed but equivalent
-    readouts of the same deal, so this never fabricates a number, it just
-    prefers whichever of the two actually ran. Only a property with neither
-    (no benchmark AND analysis failed) still comes back null — nothing left
-    to compute it from. `status`/`confidence_tag`/`updated_at` are left
-    exactly as persisted (never backfilled), so callers can still tell a
-    real agent verdict apart from a live-only fallback.
-
-    Shared by list_deals() (below) and app.main's investment-memo route, so
-    the Deal Memo PDF and the /deals list can never disagree about whether
-    a given deal's Score/ROI/Net Profit is "null" or not.
+    Deal verdict numbers for the cards/table/PDF. Computed live from
+    app.flip_model whenever possible, so a benchmark update shows up
+    immediately instead of waiting for the next scan to re-underwrite the
+    row. Falls back to the persisted scan-time verdict otherwise.
     """
+    if flip is not None:
+        return {
+            "estimated_market_value_huf": round(flip.exit_price_huf, 2),
+            "renovation_cost_huf": round(flip.renovation_cost_huf + flip.contingency_huf, 2),
+            "total_investment_huf": round(flip.total_cash_needed_huf, 2),
+            "net_profit_huf": round(flip.net_profit_huf, 2),
+            "flip_roi_percent": round(flip.roi_percent, 2),
+            "rental_yield_percent": prop.underwriting_rental_yield_percent,
+            "deal_score": score,
+            "status": "validated" if flip.verdict == "buy" else ("risk:below_hurdle_roi" if flip.verdict == "skip" else "consider"),
+            "confidence_tag": "High Potential Flip" if flip.verdict == "buy" else None,
+            "updated_at": prop.underwriting_updated_at.isoformat() if prop.underwriting_updated_at else None,
+        }
     has_underwriting = prop.underwriting_updated_at is not None
     if not has_underwriting and best_tier is None:
         return None
-
     return {
-        "estimated_market_value_huf": (
-            prop.underwriting_market_value_huf
-            if prop.underwriting_market_value_huf is not None
-            else (best_tier["exit_price_huf"] if best_tier else None)
-        ),
-        "renovation_cost_huf": (
-            prop.underwriting_renovation_cost_huf
-            if prop.underwriting_renovation_cost_huf is not None
-            else (best_tier["renovation_cost_huf"] if best_tier else None)
-        ),
-        "total_investment_huf": (
-            prop.underwriting_total_investment_huf
-            if prop.underwriting_total_investment_huf is not None
-            else (best_tier["total_investment_huf"] if best_tier else None)
-        ),
-        "net_profit_huf": (
-            prop.underwriting_net_profit_huf
-            if prop.underwriting_net_profit_huf is not None
-            else (best_tier["net_profit_huf"] if best_tier else None)
-        ),
-        "flip_roi_percent": (
-            prop.underwriting_flip_roi_percent
-            if prop.underwriting_flip_roi_percent is not None
-            else (best_tier["roi_percent"] if best_tier else None)
-        ),
-        "rental_yield_percent": (
-            prop.underwriting_rental_yield_percent
-            if prop.underwriting_rental_yield_percent is not None
-            else (best_tier["net_yield_percent"] if best_tier else None)
-        ),
+        "estimated_market_value_huf": prop.underwriting_market_value_huf
+        if prop.underwriting_market_value_huf is not None
+        else (best_tier["exit_price_huf"] if best_tier else None),
+        "renovation_cost_huf": prop.underwriting_renovation_cost_huf
+        if prop.underwriting_renovation_cost_huf is not None
+        else (best_tier["renovation_cost_huf"] if best_tier else None),
+        "total_investment_huf": prop.underwriting_total_investment_huf
+        if prop.underwriting_total_investment_huf is not None
+        else (best_tier["total_investment_huf"] if best_tier else None),
+        "net_profit_huf": prop.underwriting_net_profit_huf
+        if prop.underwriting_net_profit_huf is not None
+        else (best_tier["net_profit_huf"] if best_tier else None),
+        "flip_roi_percent": prop.underwriting_flip_roi_percent
+        if prop.underwriting_flip_roi_percent is not None
+        else (best_tier["roi_percent"] if best_tier else None),
+        "rental_yield_percent": prop.underwriting_rental_yield_percent
+        if prop.underwriting_rental_yield_percent is not None
+        else (best_tier["net_yield_percent"] if best_tier else None),
         "deal_score": prop.underwriting_deal_score if prop.underwriting_deal_score is not None else score,
         "status": prop.underwriting_status,
         "confidence_tag": prop.underwriting_confidence_tag,
@@ -163,22 +279,20 @@ def build_underwriting_dict(prop: models.Property, best_tier: Optional[dict], sc
 
 def compute_stats(db: Session, eur_huf_rate: float, top_n: int = 5) -> dict:
     """
-    total_listings         - count of every stored Property
-    avg_price_sqm_huf/eur  - average price_per_sqm across properties that have one
-    top_undervalued        - up to top_n properties scraped today, ranked by
-                              discount vs. their district benchmark (highest first).
-                              Falls back to ranking across ALL properties (any date)
-                              if nothing was scraped today, so the dashboard isn't
-                              just empty on a quiet day — `is_today_only` says which.
+    KPIs over ACTIVE listings only (seen within STALE_AFTER_DAYS).
+    top_undervalued ranks by realistic flip ROI, newest-today first,
+    falling back to all active listings on a quiet day.
     """
-    properties: List[models.Property] = db.query(models.Property).all()
+    now = datetime.datetime.utcnow()
+    properties: List[models.Property] = [p for p in db.query(models.Property).all() if not is_stale(p, now)]
     total_listings = len(properties)
+    cache = BenchmarkCache(db)
 
     priced = [p.price_per_sqm for p in properties if p.price_per_sqm]
     avg_price_sqm_huf = round(sum(priced) / len(priced), 2) if priced else None
     avg_price_sqm_eur = round(avg_price_sqm_huf / eur_huf_rate, 2) if avg_price_sqm_huf else None
 
-    today_start = datetime.datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     todays_properties = [p for p in properties if p.created_at and p.created_at >= today_start]
 
     is_today_only = True
@@ -188,14 +302,17 @@ def compute_stats(db: Session, eur_huf_rate: float, top_n: int = 5) -> dict:
         pool = properties
 
     scored = []
+    verdict_counts = {"buy": 0, "consider": 0, "skip": 0}
+    for prop in properties:
+        flip = compute_flip(prop, cache)
+        if flip is not None:
+            verdict_counts[flip.verdict] += 1
     for prop in pool:
-        benchmark = _district_benchmark_or_none(db, prop.district)
-        if benchmark is None:
+        benchmark = cache.district(prop.district)
+        flip = compute_flip(prop, cache)
+        if benchmark is None or flip is None:
             continue
-        discount = _discount_percent(prop, benchmark)
-        if discount is None:
-            continue
-        scored.append((discount, prop, benchmark))
+        scored.append((flip.roi_percent, prop, benchmark, flip))
 
     scored.sort(key=lambda t: t[0], reverse=True)
     top_undervalued = [
@@ -206,11 +323,16 @@ def compute_stats(db: Session, eur_huf_rate: float, top_n: int = 5) -> dict:
             "price_huf": prop.price_huf,
             "price_per_sqm": prop.price_per_sqm,
             "benchmark_price_per_sqm": _reference_price_sqm(prop, benchmark),
-            "discount_percent": discount,
+            "discount_percent": round(flip.discount_vs_market_percent, 2)
+            if flip.discount_vs_market_percent is not None
+            else None,
+            "roi_percent": round(flip.roi_percent, 2),
+            "verdict": flip.verdict,
         }
-        for discount, prop, benchmark in scored[:top_n]
+        for _roi, prop, benchmark, flip in scored[:top_n]
     ]
 
+    last_seen_values = [p.last_seen_at for p in properties if p.last_seen_at]
     return {
         "total_listings": total_listings,
         "avg_price_sqm_huf": avg_price_sqm_huf,
@@ -219,19 +341,21 @@ def compute_stats(db: Session, eur_huf_rate: float, top_n: int = 5) -> dict:
         "top_undervalued": top_undervalued,
         "is_today_only": is_today_only,
         "today_new_listings": len(todays_properties),
-        "computed_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "verdict_counts": verdict_counts,
+        "last_scan_at": max(last_seen_values).isoformat() + "Z" if last_seen_values else None,
+        "computed_at": now.isoformat() + "Z",
     }
 
 
-# Sort keys, most-recently-used first. Each maps a deal dict to a sort key;
-# entries with a None underlying value always sort last, regardless of
-# direction, so "missing data" never masquerades as "worst" or "best".
-SORT_OPTIONS = ("newest", "price_desc", "price_asc", "score_desc", "roi_desc", "sqm_asc", "roi_score_desc")
+SORT_OPTIONS = ("newest", "price_desc", "price_asc", "score_desc", "roi_desc", "sqm_asc", "roi_score_desc", "profit_desc")
 
-# Default sort: highest persisted Net ROI first, Deal Score as the tiebreaker
-# for equal/missing ROI — surfaces the best underwritten opportunities first
-# instead of just the most-recently-scraped ones.
 DEFAULT_SORT = "roi_score_desc"
+
+
+def _roi_key(d: dict):
+    flip = d.get("flip")
+    roi = flip["roi_percent"] if flip else None
+    return (roi is None, -(roi or 0))
 
 
 def _sort_deals(deals: List[dict], sort_by: str) -> List[dict]:
@@ -241,27 +365,15 @@ def _sort_deals(deals: List[dict], sort_by: str) -> List[dict]:
         return sorted(deals, key=lambda d: (d["price_huf"] is None, d["price_huf"] or 0))
     if sort_by == "score_desc":
         return sorted(deals, key=lambda d: (d["deal_score"] is None, -(d["deal_score"] or 0)))
-    if sort_by == "roi_desc":
+    if sort_by in ("roi_desc", "roi_score_desc"):
+        return sorted(deals, key=lambda d: (*_roi_key(d), d["deal_score"] is None, -(d["deal_score"] or 0)))
+    if sort_by == "profit_desc":
         return sorted(
             deals,
-            key=lambda d: (
-                d["best_tier"] is None or d["best_tier"]["roi_percent"] is None,
-                -((d["best_tier"] or {}).get("roi_percent") or 0),
-            ),
-        )
-    if sort_by == "roi_score_desc":
-        return sorted(
-            deals,
-            key=lambda d: (
-                d["underwriting"] is None or d["underwriting"]["flip_roi_percent"] is None,
-                -((d["underwriting"] or {}).get("flip_roi_percent") or 0),
-                d["deal_score"] is None,
-                -(d["deal_score"] or 0),
-            ),
+            key=lambda d: (d.get("flip") is None, -((d.get("flip") or {}).get("net_profit_huf") or 0)),
         )
     if sort_by == "sqm_asc":
         return sorted(deals, key=lambda d: (d["price_per_sqm"] is None, d["price_per_sqm"] or 0))
-    # "newest" (default / unrecognized) — created_at desc, matching the DB's own ordering.
     return sorted(deals, key=lambda d: d["created_at"] or "", reverse=True)
 
 
@@ -284,22 +396,16 @@ def list_deals(
     sort_by: str = DEFAULT_SORT,
     skip: int = 0,
     limit: Optional[int] = None,
-) -> List[dict]:
+    verdicts: Optional[List[str]] = None,
+    include_stale: bool = False,
+    with_total: bool = False,
+):
     """
-    Property rows (DB-level filtered by district/size/price/portal/favorite/
-    pipeline status) enriched with their full renovation analysis and a
-    0-100 Deal Score, then optionally filtered by min_roi (best tier's ROI%
-    >= min_roi) and by min_flip_roi (the strict, persisted underwriting Net
-    ROI hurdle — see DEFAULT_MIN_FLIP_ROI_PERCENT), sorted by `sort_by` (see
-    SORT_OPTIONS), and finally paged with skip/limit. A property with no
-    district benchmark yet gets analysis=None and is excluded whenever
-    min_roi is set, since there's nothing to compare it against.
-
-    Sorting and paging both happen in Python, after the full matching set is
-    enriched — several sort keys (deal_score, ROI) only exist post-analysis,
-    so they can't be pushed down to the DB query. `limit=None` (the default)
-    returns every relevant listing, unslicing what used to be a hard 200-row
-    cap.
+    Active listings (not seen for > STALE_AFTER_DAYS -> hidden unless
+    include_stale) enriched with the realistic flip verdict (`flip`), the
+    interactive tier analysis, and the Deal Score, filtered, sorted, paged.
+    min_roi / min_flip_roi both filter on the realistic after-tax flip ROI.
+    with_total=True returns (page, total_matching) for pagination.
     """
     properties = crud.list_properties(
         db,
@@ -318,32 +424,31 @@ def list_deals(
         pipeline_status=pipeline_status,
     )
 
+    cache = BenchmarkCache(db)
+    now = datetime.datetime.utcnow()
     deals = []
     for prop in properties:
-        analysis_dict, best_tier, discount_percent, score = compute_live_deal_metrics(db, prop, eur_huf_rate)
+        stale = is_stale(prop, now)
+        if stale and not include_stale and not prop.is_favorite:
+            continue  # favorites stay visible even after the ad disappears
 
-        if min_roi is not None:
-            if best_tier is None or best_tier["roi_percent"] is None or best_tier["roi_percent"] < min_roi:
-                continue
+        flip = compute_flip(prop, cache)
+        roi = flip.roi_percent if flip else None
+        if min_roi is not None and (roi is None or roi < min_roi):
+            continue
+        if min_flip_roi is not None and roi is not None and roi < min_flip_roi:
+            continue
+        if verdicts and (flip is None or flip.verdict not in verdicts):
+            continue
 
-        # The persisted agent verdict (prop.underwriting_*) is the primary
-        # source for these four numbers, but it's null until a scan has
-        # actually underwritten this row (or if the agent hit "no_benchmark"/
-        # "insufficient_data"). See build_underwriting_dict()'s docstring for
-        # the null-backfill rule.
-        underwriting = build_underwriting_dict(prop, best_tier, score)
-
-        if min_flip_roi is not None and underwriting is not None:
-            flip_roi = underwriting["flip_roi_percent"]
-            if flip_roi is not None and flip_roi < min_flip_roi:
-                continue
-
-        # Conservative/Base/Optimistic sensitivity scenarios — see
-        # app.services.scenario_analysis. None when there's not enough data
-        # (missing size/price, or no renovated benchmark yet for this
-        # district), same degrade-gracefully rule as `analysis`/`underwriting`.
-        benchmark = _district_benchmark_or_none(db, prop.district)
+        analysis_dict, best_tier, discount_percent, score = compute_live_deal_metrics(db, prop, eur_huf_rate, cache)
+        underwriting = build_underwriting_dict(prop, best_tier, score, flip)
+        benchmark = cache.district(prop.district)
         scenarios = scenario_analysis.compute_scenarios(prop, benchmark)
+
+        price_drop_percent = None
+        if prop.previous_price_huf and prop.price_huf and prop.previous_price_huf > 0:
+            price_drop_percent = round((prop.previous_price_huf - prop.price_huf) / prop.previous_price_huf * 100, 1)
 
         deals.append(
             {
@@ -358,7 +463,7 @@ def list_deals(
                 "price_eur": prop.price_eur,
                 "price_per_sqm": prop.price_per_sqm,
                 "url": prop.url,
-                "source_url": prop.url,  # alias for `url` — the exact source-portal listing page
+                "source_url": prop.url,
                 "duplicate_source_urls": prop.duplicate_source_urls or [],
                 "condition": prop.condition,
                 "condition_tag": classify_condition_tag(prop.condition),
@@ -373,28 +478,28 @@ def list_deals(
                 "ceiling_height_m": prop.ceiling_height_m,
                 "sub_district": prop.sub_district,
                 "created_at": prop.created_at.isoformat() if prop.created_at else None,
+                "last_seen_at": _last_seen(prop).isoformat() if _last_seen(prop) else None,
+                "is_stale": stale,
+                "previous_price_huf": prop.previous_price_huf,
+                "price_drop_percent": price_drop_percent,
                 "analysis": analysis_dict,
                 "best_tier": best_tier,
                 "discount_percent": discount_percent,
                 "deal_score": score,
                 "deal_score_band": deal_score_module.score_band(score),
-                # Persisted verdict from app/services/valuation_agent.py, with
-                # nulls backfilled from the live analysis above — see comment
-                # above `has_underwriting`.
                 "underwriting": underwriting,
-                # Conservative/Base/Optimistic sensitivity — see
-                # app.services.scenario_analysis. None on the same
-                # missing-data conditions as `analysis`.
                 "scenarios": scenarios,
+                "flip": flip.to_dict() if flip else None,
             }
         )
 
     deals = _sort_deals(deals, sort_by)
+    total = len(deals)
     if limit is not None:
         deals = deals[skip : skip + limit]
     elif skip:
         deals = deals[skip:]
-    return deals
+    return (deals, total) if with_total else deals
 
 
 # Column order for deals_to_csv() — deliberately flat (no nested objects),
@@ -405,6 +510,9 @@ _CSV_COLUMNS = [
     "building_type", "ceiling_height_m",
     "price_huf", "price_eur", "price_per_sqm", "condition", "condition_tag",
     "portal", "url", "duplicate_source_urls", "pipeline_status", "is_favorite", "notes", "created_at",
+    "last_seen_at", "previous_price_huf", "price_drop_percent",
+    "flip_verdict", "flip_roi_percent", "flip_net_profit_huf", "flip_max_offer_price_huf",
+    "flip_exit_price_huf", "flip_renovation_cost_huf", "flip_scope", "flip_confidence",
     "discount_percent", "deal_score", "deal_score_band",
     "underwriting_estimated_market_value_huf", "underwriting_renovation_cost_huf",
     "underwriting_total_investment_huf", "underwriting_net_profit_huf",
@@ -425,5 +533,14 @@ def deals_to_csv(deals: List[dict]) -> str:
         row["duplicate_source_urls"] = ";".join(deal.get("duplicate_source_urls") or [])
         for key, value in underwriting.items():
             row[f"underwriting_{key}"] = value
+        flip = deal.get("flip") or {}
+        row["flip_verdict"] = flip.get("verdict")
+        row["flip_roi_percent"] = flip.get("roi_percent")
+        row["flip_net_profit_huf"] = flip.get("net_profit_huf")
+        row["flip_max_offer_price_huf"] = flip.get("max_offer_price_huf")
+        row["flip_exit_price_huf"] = flip.get("exit_price_huf")
+        row["flip_renovation_cost_huf"] = flip.get("renovation_cost_huf")
+        row["flip_scope"] = flip.get("scope")
+        row["flip_confidence"] = flip.get("confidence")
         writer.writerow(row)
     return buffer.getvalue()

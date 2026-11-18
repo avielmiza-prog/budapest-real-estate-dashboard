@@ -1,3 +1,4 @@
+import datetime
 """
 Plain data-access functions, kept separate from the route handlers in main.py
 so the HTTP layer and the DB layer don't get tangled together.
@@ -56,12 +57,20 @@ def upsert_property_by_url(db: Session, payload: schemas.PropertyCreate) -> mode
     if data.get("price_per_sqm") is None:
         data["price_per_sqm"] = _compute_price_per_sqm(data.get("price_huf"), data.get("size_sqm"))
 
+    now = datetime.datetime.utcnow()
     if existing is None:
         prop = models.Property(**data)
+        prop.last_seen_at = now
         db.add(prop)
     else:
+        old_price = existing.price_huf
+        new_price = data.get("price_huf")
+        if old_price and new_price and abs(new_price - old_price) / old_price > 0.005:
+            existing.previous_price_huf = old_price
+            existing.price_changed_at = now
         for key, value in data.items():
             setattr(existing, key, value)
+        existing.last_seen_at = now
         prop = existing
 
     db.commit()
@@ -212,3 +221,30 @@ def delete_district_benchmark(db: Session, district_number: int) -> bool:
     db.delete(benchmark)
     db.commit()
     return True
+
+
+def touch_last_seen(db: Session, urls: List[str]) -> int:
+    """Mark listings as still live without re-fetching them. Returns rows updated."""
+    if not urls:
+        return 0
+    now = datetime.datetime.utcnow()
+    updated = (
+        db.query(models.Property)
+        .filter(models.Property.url.in_(list(urls)))
+        .update({models.Property.last_seen_at: now}, synchronize_session=False)
+    )
+    db.commit()
+    return updated
+
+
+def recently_seen_urls(db: Session, portal: str, within_days: int = 7) -> set:
+    """URLs of this portal's listings already stored and seen recently: a scan can skip their detail pages."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=within_days)
+    rows = (
+        db.query(models.Property.url)
+        .filter(models.Property.portal == portal)
+        .filter(models.Property.url.isnot(None))
+        .filter(models.Property.last_seen_at >= cutoff)
+        .all()
+    )
+    return {r[0] for r in rows}

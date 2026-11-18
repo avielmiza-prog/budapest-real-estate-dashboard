@@ -118,6 +118,14 @@ class IngatlanbazarScraper(BaseScraper):
                 if listing_url in seen_urls:
                     continue
                 seen_urls.add(listing_url)
+                if listing_url in self.known_urls:
+                    # Already stored and seen recently: just mark it live
+                    # again (orchestrator bumps last_seen_at) instead of
+                    # re-downloading its detail page. This is what lets a
+                    # scan reach deeper pages and actually find NEW listings
+                    # instead of re-reading the same newest 150 every time.
+                    self.seen_known_urls.append(listing_url)
+                    continue
                 if not ignore_robots and not robots_mod.is_allowed(listing_url):
                     continue
                 time.sleep(1.0)  # polite delay between per-listing detail-page fetches

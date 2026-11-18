@@ -30,7 +30,15 @@ DATABASE_URL = _raw_database_url
 # requests to different threads than the one that created the connection.
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+# pool_pre_ping/pool_recycle: Neon (serverless Postgres) closes idle
+# connections. Without these, the first request after a quiet period fails
+# or hangs on a dead pooled connection — one of the "site is stuck" causes.
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=connect_args,
+    pool_pre_ping=True,
+    pool_recycle=280,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
