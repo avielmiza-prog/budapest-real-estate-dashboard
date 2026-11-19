@@ -211,6 +211,9 @@ def validate_and_underwrite(prop: models.Property, db: Session) -> UnderwritingR
         building_type_samples=bt.sample_count if bt else 0,
         renovated_sample_count=benchmark.sample_count_renovated,
         renovated_source=benchmark.source_renovated,
+        description=prop.description,
+        floor=prop.floor,
+        has_elevator=prop.has_elevator,
     )
     exit_price_huf = flip.exit_price_huf
     renovation_cost_huf = flip.renovation_cost_huf + flip.contingency_huf

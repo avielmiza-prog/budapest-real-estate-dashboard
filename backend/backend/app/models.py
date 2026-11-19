@@ -58,6 +58,10 @@ class Property(Base):
     # Previous asking price, kept when a re-scan finds a different price, so
     # the UI can show "price dropped 8%" (a strong negotiation signal).
     previous_price_huf = Column(Float, nullable=True)
+    # Listing details used by app.listing_assessment's red-flag checks.
+    description = Column(Text, nullable=True)
+    floor = Column(String(40), nullable=True)
+    has_elevator = Column(Boolean, nullable=True)
     price_changed_at = Column(DateTime, nullable=True)
 
     # Sub-market precision fields — extracted from listing text by

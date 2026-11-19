@@ -40,6 +40,11 @@ class RawListing:
     balcony_sqm: Optional[float] = None  # only set when the portal gives an actual size, never guessed
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    # Floor as the portal states it ("földszint", "3", "szuterén", ...),
+    # elevator yes/no, and the building material ("tégla", "panel", ...).
+    floor_text: str = ""
+    has_elevator: Optional[bool] = None
+    building_material_text: str = ""
 
 
 class BaseScraper(ABC):

@@ -134,7 +134,13 @@ def test_full_underwriting_math_and_formulas():
         purchase_costs = 40_000_000 * 0.055  # 2,200,000
         holding = 7 * (450 * 50 + 25_000)  # 332,500
         total_cash = 40_000_000 + purchase_costs + renovation + holding
-        exit_price = 50 * 1_500_000 * 0.95  # asking-to-sale discount
+        # Exit anchored to the flat's own price (800k/sqm) + medium-scope
+        # uplift of the raw(800k)->renovated(1.5M) gap; no sample counts ->
+        # thin data -> 75% anchor weight; asking-to-sale discount 5%.
+        uplift = (1_500_000 - 800_000) * 0.6
+        anchored = 40_000_000 / 50 + uplift
+        exit_sqm = min(1_500_000, 0.75 * anchored + 0.25 * 1_500_000) * 0.95
+        exit_price = 50 * exit_sqm
         sale_costs = exit_price * 0.03
         taxable_gain = exit_price - sale_costs - (total_cash - holding)
         net_profit = exit_price - sale_costs - total_cash - 0.15 * taxable_gain

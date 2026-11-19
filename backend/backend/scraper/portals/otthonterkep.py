@@ -33,6 +33,7 @@ Scraper for otthonterkep.hu.
 ################################################################################
 """
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
@@ -47,7 +48,11 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://otthonterkep.hu"
 
 # PLACEHOLDER — confirm the real search-results path/query params.
-SEARCH_URL_TEMPLATE = BASE_URL + "/elado+lakas+budapest?page={page}"
+# Verified live 2026-11-18: "/elado+lakas+budapest?page=N" now returns
+# listings from ALL of Hungary and ignores ?page. The Budapest-only search
+# is /elado+lakas/budapest, paged with ?p=N (20 per page, ~6,500 flats),
+# newest first.
+SEARCH_URL_TEMPLATE = BASE_URL + "/elado+lakas/budapest?p={page}&sort=ad_feladas_time%7Cdesc"
 
 SELECTORS = {
     "listing_card_link": "a[href*='/ingatlan/']",  # PLACEHOLDER
@@ -82,50 +87,43 @@ class OtthonterkepScraper(BaseScraper):
         return SEARCH_URL_TEMPLATE.format(page=page_number)
 
     def fetch_via_http(self, max_listings: int, max_pages: int, ignore_robots: bool = False) -> List[RawListing]:
-        from bs4 import BeautifulSoup
-
+        """
+        Reads the search-result cards (price, size, rooms, floor, district,
+        photo: all on the card), and opens a listing's own page only for
+        listings not seen before, to get the description and building
+        material. Known listings just get their last_seen bumped.
+        """
         from scraper import http_client
         from scraper import robots as robots_mod
 
         raws: List[RawListing] = []
         seen_urls = set()
+        new_count = 0
         for page_number in range(1, max_pages + 1):
             search_url = self.build_search_url(page_number)
             if not ignore_robots:
                 robots_mod.check_or_raise(search_url)
-
             html = http_client.fetch_html(search_url)
-            soup = BeautifulSoup(html, "lxml")
-            page_urls = list(
-                dict.fromkeys(
-                    url_utils.clean_listing_url(a["href"], base_url=BASE_URL)
-                    for a in soup.select(SELECTORS["listing_card_link"])
-                    if a.get("href")
-                )
-            )
-            if not page_urls:
+            cards = parse_search_cards(html)
+            if not cards:
                 break
-
-            for listing_url in page_urls:
-                if listing_url in seen_urls:
+            fresh_on_page = 0
+            for raw in cards:
+                if raw.url in seen_urls:
                     continue
-                seen_urls.add(listing_url)
-                if listing_url in self.known_urls:
-                    # Already stored and seen recently: just mark it live
-                    # again (orchestrator bumps last_seen_at) instead of
-                    # re-downloading its detail page. This is what lets a
-                    # scan reach deeper pages and actually find NEW listings
-                    # instead of re-reading the same newest 150 every time.
-                    self.seen_known_urls.append(listing_url)
+                seen_urls.add(raw.url)
+                fresh_on_page += 1
+                if raw.url in self.known_urls:
+                    self.seen_known_urls.append(raw.url)
                     continue
-                if not ignore_robots and not robots_mod.is_allowed(listing_url):
-                    continue
-                time.sleep(1.0)  # polite delay between per-listing detail-page fetches
-                raw = _fetch_listing_via_http(listing_url)
-                if raw is not None:
-                    raws.append(raw)
-                    if len(raws) >= max_listings:
-                        return raws
+                time.sleep(1.0)  # polite delay between detail-page fetches
+                _enrich_from_detail(raw)
+                raws.append(raw)
+                new_count += 1
+                if new_count >= max_listings:
+                    return raws
+            if fresh_on_page == 0:
+                break  # paging stopped advancing
         return raws
 
     def extract_listing_urls(self, page) -> List[str]:
@@ -254,3 +252,83 @@ def _fetch_listing_via_http(url: str) -> Optional[RawListing]:
         listing.address_text = full_text
 
     return listing
+
+
+_NUMBER_RE = re.compile(r"(\d[\d\s\u00a0\.]*)(?:[,](\d+))?")
+
+
+def _first_number(text: str):
+    m = re.search(r"\d+(?:[.,]\d+)?", text or "")
+    return float(m.group(0).replace(",", ".")) if m else None
+
+
+def _labelled_value(card_text: str, label: str) -> str:
+    m = re.search(label + r"\s*:\s*([^\n]+)", card_text)
+    return m.group(1).strip() if m else ""
+
+
+def parse_search_cards(html: str) -> List[RawListing]:
+    """One RawListing per `.card.property` on a search page (markup verified 2026-11-18)."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "lxml")
+    out: List[RawListing] = []
+    for card in soup.select(".card.property"):
+        link = card.select_one("a.card-header-link") or card.select_one("a[href*='/ingatlan/elado+lakas/']")
+        if link is None or not link.get("href"):
+            continue
+        url = url_utils.clean_listing_url(link["href"], base_url=BASE_URL)
+        heading = link.get_text(" ", strip=True)  # e.g. "Budapest VIII. kerület Práter utca"
+        price_el = card.select_one(".fw-price")
+        text = card.get_text("\n", strip=True)
+        size_text = _labelled_value(text, "Alapterület")
+        rooms_text = _labelled_value(text, "Szobaszám")
+        floor_text = _labelled_value(text, "Emelet")
+        img = card.select_one("img")
+        image_urls = []
+        if img is not None:
+            src = img.get("src") or img.get("data-src") or ""
+            if src and "noimage" not in src:
+                image_urls.append(urljoin(BASE_URL, src))
+        slug_district = re.search(r"/budapest-([ivx]+)-kerulet/", url, re.I)
+        out.append(
+            RawListing(
+                url=url,
+                title_text=heading,
+                address_text=heading,
+                price_text=price_el.get_text(" ", strip=True) if price_el else "",
+                size_sqm_value=_first_number(size_text),
+                rooms_value=_first_number(rooms_text),
+                district_value=slug_district.group(1).upper() if slug_district else None,
+                floor_text=floor_text,
+                image_urls=image_urls,
+            )
+        )
+    return out
+
+
+def _enrich_from_detail(raw: RawListing) -> None:
+    """Description (JSON-LD Product, HTML-escaped twice on this site) and building material."""
+    import html as html_mod
+
+    from bs4 import BeautifulSoup
+
+    from scraper import http_client
+
+    try:
+        page = http_client.fetch_html(raw.url)
+    except http_client.FetchError as e:
+        logger.info("Could not fetch %s: %s", raw.url, e)
+        return
+    for obj in json_extract.extract_json_ld_from_html(page):
+        if isinstance(obj, dict) and obj.get("@type") == "Product" and obj.get("description"):
+            raw.description_text = html_mod.unescape(html_mod.unescape(obj["description"]))
+            break
+    soup = BeautifulSoup(page, "lxml")
+    for li in soup.select("li"):
+        t = li.get_text(" ", strip=True)
+        if t.startswith("Építőanyag"):
+            raw.building_material_text = t.replace("Építőanyag", "").strip()
+        elif t.startswith("Lift"):
+            v = t.replace("Lift", "").strip().lower()
+            raw.has_elevator = True if v.startswith("van") else (False if v.startswith("nincs") else None)

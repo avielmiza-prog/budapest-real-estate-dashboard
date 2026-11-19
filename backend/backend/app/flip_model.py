@@ -45,6 +45,7 @@ from app.building_classifier import (
     BUILDING_TYPE_PANEL_BLOCK,
     renovation_cost_multiplier,
 )
+from app.listing_assessment import assess_listing, exit_factor as flags_exit_factor
 from app.condition_classifier import (
     CONDITION_AVERAGE,
     CONDITION_NEEDS_RENOVATION,
@@ -105,6 +106,15 @@ STATIC_BUILDING_TYPE_FACTOR = {
 BUILDING_TYPE_FACTOR_CLAMP = (0.70, 1.20)
 MIN_BUILDING_TYPE_SAMPLES = 5
 
+# Share of the district's raw->renovated price gap that a renovation of
+# each scope actually captures.
+SCOPE_UPLIFT_SHARE = {"full": 1.0, "medium": 0.6, "refresh": 0.15, "none": 0.0}
+# How much the exit leans on the flat's own price (+ uplift) vs. the district
+# renovated median. More weight on the flat itself when district data is thin.
+ANCHOR_WEIGHT = 0.6
+ANCHOR_WEIGHT_THIN_DATA = 0.75
+RENOVATED_TO_RAW_RATIO = 1.35
+
 # Outside this size range district flat medians are not a fair comparison.
 MIN_TYPICAL_FLAT_SQM = 18
 MAX_TYPICAL_FLAT_SQM = 150
@@ -141,6 +151,9 @@ class FlipResult:
     confidence: str  # "high" | "medium" | "low"
     confidence_reasons: list  # codes: fallback_benchmark | no_condition | no_building_type | above_renovated_market
     exit_basis: str  # human-readable: where exit_price_sqm_huf came from
+    red_flags: list  # codes from app.listing_assessment that lower value or block a buy
+    positives: list  # codes that support the deal
+    flags_exit_factor: float  # combined sale-price adjustment from red flags
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -213,16 +226,21 @@ def _run(
     }
 
 
-def _max_offer(
-    usable_area_sqm: float, reno_per_sqm: float, holding_months: int, exit_price_huf: float, target_roi: float
-) -> Optional[float]:
-    """Highest purchase price that still reaches target_roi. ROI falls monotonically with price -> bisection."""
-    low, high = 0.0, exit_price_huf
-    if _run(low, usable_area_sqm, reno_per_sqm, holding_months, exit_price_huf)["roi"] < target_roi:
-        return None  # even a free flat would not reach the target (renovation too expensive vs. exit)
-    for _ in range(60):
+def _max_offer(usable_area_sqm, reno_per_sqm, holding_months, exit_for, target_roi) -> Optional[float]:
+    """
+    Highest purchase price that still reaches target_roi. The exit now rises
+    with the purchase price (it is anchored to it) but by less than 1:1, so
+    ROI still falls monotonically with price -> bisection works.
+    """
+    def roi_at(price):
+        return _run(price, usable_area_sqm, reno_per_sqm, holding_months, exit_for(price))["roi"]
+
+    low, high = 0.0, exit_for(0.0) * 3 + 1
+    if roi_at(1.0) < target_roi:
+        return None
+    for _ in range(80):
         mid = (low + high) / 2
-        if _run(mid, usable_area_sqm, reno_per_sqm, holding_months, exit_price_huf)["roi"] >= target_roi:
+        if roi_at(mid) >= target_roi:
             low = mid
         else:
             high = mid
@@ -245,6 +263,9 @@ def evaluate_flip(
     renovated_sample_count: Optional[int] = None,
     renovated_source: Optional[str] = None,
     target_roi_percent: float = TARGET_ROI_PERCENT,
+    description: Optional[str] = None,
+    floor: Optional[str] = None,
+    has_elevator: Optional[bool] = None,
 ) -> FlipResult:
     if size_sqm <= 0 or price_huf <= 0:
         raise ValueError("size_sqm and price_huf must be > 0")
@@ -262,13 +283,40 @@ def evaluate_flip(
         building_type_samples,
         district_all_median_sqm,
     )
-    exit_price_sqm = district_renovated_median_sqm * factor * (1 - ASKING_TO_SALE_DISCOUNT)
+    flags = assess_listing(description, floor, has_elevator, building_type)
+    flag_factor = flags_exit_factor(flags)
+    blockers = [f.code for f in flags if f.blocker]
+    # Sale price per sqm, anchored to THIS flat. A flat's own asking price
+    # already reflects its street, building and floor; renovation adds the
+    # raw->renovated uplift for its scope, it does not move the flat to the
+    # district's average location. The district renovated median (adjusted
+    # for building type and red flags) is only a ceiling. Without the anchor
+    # every cheap flat was assumed to sell at the district average, which
+    # doubled some exit prices.
+    district_exit_sqm = district_renovated_median_sqm * factor * flag_factor
+    raw_median = district_raw_median_sqm or district_renovated_median_sqm / RENOVATED_TO_RAW_RATIO
+    uplift_sqm = max(0.0, district_renovated_median_sqm - raw_median) * SCOPE_UPLIFT_SHARE[scope] * factor
+    thin_data = renovated_source == "fallback" or (renovated_sample_count or 0) < 10
+    w = ANCHOR_WEIGHT_THIN_DATA if thin_data else ANCHOR_WEIGHT
+
+    def exit_sqm_for(purchase_price: float) -> float:
+        anchored_sqm = purchase_price / size_sqm + uplift_sqm
+        return min(district_exit_sqm, w * anchored_sqm + (1 - w) * district_exit_sqm) * (1 - ASKING_TO_SALE_DISCOUNT)
+
+    exit_price_sqm = exit_sqm_for(price_huf)
+    exit_basis = (
+        f"{w:.0%} this flat's own price + renovation uplift, {1 - w:.0%} district "
+        f"({exit_basis}); capped at the district renovated price"
+    )
     exit_price = exit_price_sqm * usable_area_sqm
+
+    def exit_for(purchase_price: float) -> float:
+        return exit_sqm_for(purchase_price) * usable_area_sqm
 
     r = _run(price_huf, usable_area_sqm, reno_per_sqm, holding_months, exit_price)
     annualized = r["roi"] * 12 / holding_months if holding_months else r["roi"]
 
-    max_offer = _max_offer(usable_area_sqm, reno_per_sqm, holding_months, exit_price, target_roi_percent)
+    max_offer = _max_offer(usable_area_sqm, reno_per_sqm, holding_months, exit_for, target_roi_percent)
     offer_gap = (price_huf - max_offer) / max_offer * 100 if max_offer else None
 
     # Discount vs. the market for flats in the SAME condition (a raw flat
@@ -305,6 +353,10 @@ def evaluate_flip(
         verdict = "consider"  # close enough that a negotiated price could make it work
     else:
         verdict = "skip"
+    if blockers and verdict == "buy":
+        verdict = "consider"  # legal/ownership issue: check before trusting any number
+    if blockers:
+        confidence = "low"
     if unusual_size and verdict == "buy":
         verdict = "consider"  # never a confident "buy" off flat comps for a non-typical property
     if unusual_size:
@@ -336,6 +388,9 @@ def evaluate_flip(
         confidence=confidence,
         confidence_reasons=reasons,
         exit_basis=exit_basis,
+        red_flags=[f.code for f in flags if not f.positive],
+        positives=[f.code for f in flags if f.positive],
+        flags_exit_factor=flag_factor,
     )
 
 

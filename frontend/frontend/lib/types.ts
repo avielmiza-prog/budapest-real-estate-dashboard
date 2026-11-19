@@ -188,6 +188,9 @@ export interface FlipResult {
   confidence: "high" | "medium" | "low";
   confidence_reasons: string[];
   exit_basis: string;
+  red_flags?: string[];
+  positives?: string[];
+  flags_exit_factor?: number;
 }
 
 export interface TopUndervaluedDeal {

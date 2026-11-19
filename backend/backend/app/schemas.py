@@ -37,6 +37,9 @@ class PropertyBase(BaseModel):
     building_type: Optional[str] = None
     ceiling_height_m: Optional[float] = None
     sub_district: Optional[str] = None
+    description: Optional[str] = None
+    floor: Optional[str] = None
+    has_elevator: Optional[bool] = None
 
     @field_validator("pipeline_status")
     @classmethod
@@ -74,6 +77,9 @@ class PropertyUpdate(BaseModel):
     building_type: Optional[str] = None
     ceiling_height_m: Optional[float] = None
     sub_district: Optional[str] = None
+    description: Optional[str] = None
+    floor: Optional[str] = None
+    has_elevator: Optional[bool] = None
 
     @field_validator("pipeline_status")
     @classmethod

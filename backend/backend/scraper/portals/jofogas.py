@@ -23,6 +23,7 @@ robots.txt notes (checked live, 2026-08-26):
 """
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from scraper import json_extract
@@ -33,10 +34,17 @@ from scraper.base import BaseScraper, RawListing
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.jofogas.hu"
-SEARCH_URL_TEMPLATE = BASE_URL + "/budapest/ingatlan?o={page}"
+# Flats for sale only (st=s), newest first. Checked live 2026-11-18:
+# ~3,960 Budapest flats over ~111 pages of 36. The old URL
+# (/budapest/ingatlan) mixed in houses, offices and rentals.
+SEARCH_URL_TEMPLATE = "https://ingatlan.jofogas.hu/budapest/lakas?st=s&o={page}"
 
-# robots.txt ('*' group) only allows o=1..9 — deep pagination is disallowed.
-MAX_ALLOWED_PAGE = 9
+# robots.txt as of 2026-11-18 no longer restricts pagination for the `*`
+# group (only named AI-training crawlers are banned, which this personal
+# tool is not), so the cap is just a safety limit, not a robots rule.
+MAX_ALLOWED_PAGE = 150
+
+IMAGE_URL_TEMPLATE = "https://img.jofogas.hu/767x575crop/{name}"
 
 # /budapest/ingatlan is jofogas's general real-estate category — it also
 # surfaces offices, land, garages, etc. alongside apartments/houses. The
@@ -65,6 +73,9 @@ def _is_residential(ad: Dict[str, Any]) -> bool:
     category_names = {c.get("name", "").strip().lower() for c in (ad.get("category_tree") or [])}
     if not category_names & RESIDENTIAL_CATEGORY_NAMES:
         return False
+    ad_type = (ad.get("type") or {}).get("value")
+    if ad_type and ad_type != "s":  # "s" = Eladó (for sale); "u" = Kiadó (for rent)
+        return False
     return _is_for_sale(ad.get("subject", ""))
 
 
@@ -91,7 +102,17 @@ def _best_image_url(image: dict) -> str:
     variations = image.get("image_size_variations") or []
     if variations and variations[0].get("url"):
         return variations[0]["url"]
-    return image.get("url", "")
+    if image.get("url"):
+        return image["url"]
+    # Current search JSON only carries the file name; the site serves it
+    # from img.jofogas.hu (verified against the live page's <img> tags).
+    if image.get("name"):
+        return IMAGE_URL_TEMPLATE.format(name=image["name"])
+    return ""
+
+
+def _strip_html(text: str) -> str:
+    return re.sub(r"<br\s*/?>", "\n", text or "", flags=re.I).replace("&nbsp;", " ")
 
 
 def ad_to_raw_listing(ad: Dict[str, Any]) -> Optional[RawListing]:
@@ -119,11 +140,16 @@ def ad_to_raw_listing(ad: Dict[str, Any]) -> Optional[RawListing]:
 
     image_urls = [u for u in (_best_image_url(img) for img in (ad.get("images") or [])) if u]
 
+    floor_label = ((_param(parameters, "floor") or {}).get("label") or "").strip()
+    elevator_label = ((_param(parameters, "elevator") or {}).get("label") or "").strip().lower()
+    has_elevator = True if elevator_label == "van" else (False if elevator_label == "nincs" else None)
+    material_label = ((_param(parameters, "building_type") or {}).get("label") or "").strip()
+
     return RawListing(
         url=url_utils.clean_listing_url(url, base_url=BASE_URL),
         title_text=subject,
         address_text=address_text,
-        description_text=ad.get("body", "") or "",
+        description_text=_strip_html(ad.get("body", "") or ""),
         condition_text=condition_text,
         image_urls=image_urls,
         price_huf_value=price_value,
@@ -134,6 +160,9 @@ def ad_to_raw_listing(ad: Dict[str, Any]) -> Optional[RawListing]:
         # leaving balcony_sqm unset rather than guessing one.
         latitude=ad.get("latitude"),
         longitude=ad.get("longitude"),
+        floor_text=floor_label,
+        has_elevator=has_elevator,
+        building_material_text=material_label,
     )
 
 
@@ -196,6 +225,8 @@ class JofogasScraper(BaseScraper):
             if not ignore_robots:
                 robots_mod.check_or_raise(search_url)
 
+            if page_number > 1:
+                time.sleep(1.5)  # polite delay between search pages
             html = http_client.fetch_html(search_url)
             data = json_extract.extract_next_data_from_html(html)
             if data is None:

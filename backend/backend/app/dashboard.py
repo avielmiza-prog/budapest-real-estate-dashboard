@@ -155,6 +155,9 @@ def compute_flip(prop: models.Property, cache: BenchmarkCache) -> Optional[flip_
             district_all_median_sqm=cache.district_all_median(prop.district),
             renovated_sample_count=benchmark.sample_count_renovated,
             renovated_source=benchmark.source_renovated,
+            description=prop.description,
+            floor=prop.floor,
+            has_elevator=prop.has_elevator,
         )
     except ValueError:
         return None

@@ -49,6 +49,7 @@ import { ConditionBadge } from "./condition-badge";
 import { DealMicroBadges } from "./deal-micro-badges";
 import { DealScoreBadge } from "./deal-score-badge";
 import { FlipBreakdown } from "./flip-breakdown";
+import { MyAssessment } from "./my-assessment";
 import { useFlipText } from "@/lib/flip-text";
 import { FavoriteToggle, NotesEditor, PipelineStatusSelect } from "./deal-actions";
 import { ImageLightbox } from "./image-lightbox";
@@ -728,6 +729,7 @@ export function DealDetailModal({ deal, onOpenChange, onDealUpdated, currency, e
 
             <PhotoGallery images={deal.images ?? []} title={deal.title} />
 
+            {deal.flip && <MyAssessment flip={deal.flip} currency={currency} eurHufRate={eurHufRate} />}
             {deal.flip && <FlipBreakdown flip={deal.flip} currency={currency} eurHufRate={eurHufRate} />}
 
             <details className="group rounded-lg border p-4 [&_summary]:cursor-pointer">

@@ -4,7 +4,7 @@ import { Home, TrendingDown } from "lucide-react";
 import { useState } from "react";
 
 import { formatCurrency, formatPercent, formatRooms, formatSqm } from "@/lib/format";
-import { useFlipText } from "@/lib/flip-text";
+import { useFlipText, type FlipTextKey } from "@/lib/flip-text";
 import type { Currency, Deal } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -113,6 +113,11 @@ export function SimpleDealList({ deals, onSelectDeal, onDealUpdated, currency, e
                     {t("stale")}
                   </span>
                 )}
+                {(flip?.red_flags ?? []).slice(0, 2).map((code) => (
+                  <span key={code} className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200">
+                    {t(`flag_${code}` as FlipTextKey)}
+                  </span>
+                ))}
                 {flip && flip.confidence !== "high" && (
                   <span className="rounded-full border px-2 py-0.5 text-muted-foreground">
                     {flip.confidence === "low" ? t("confidenceLow") : t("confidenceMedium")}

@@ -50,7 +50,11 @@ logger = logging.getLogger(__name__)
 # Attempted in this order — cheapest/most-reliable portal first, so a
 # partial run (one or more later portals unreachable) still front-loads the
 # listings most likely to succeed.
-AGENT_PORTAL_NAMES: List[str] = ["jofogas", "otthonterkep", "ingatlanbazar"]
+# ingatlanbazar.hu was rebuilt as a client-rendered app (its search URL
+# 404s and the listing data isn't in the HTML, checked 2026-11-18), so it is
+# left out until its scraper is rewritten. Still runnable on its own via
+# `python -m scraper.run --portal ingatlanbazar`.
+AGENT_PORTAL_NAMES: List[str] = ["jofogas", "otthonterkep"]
 
 EXCLUDED_PORTALS: Dict[str, str] = {
     "ingatlan.com": (
@@ -157,11 +161,9 @@ def run_agent(
 
     try:
         for portal_name in names:
-            # Budget counts NEW listings only; re-stored known ones are free.
-            remaining = max_listings - sum(1 for r in results if r.stored and r.url not in known_all)
-            if remaining <= 0:
-                logger.info("[agent] reached max_listings=%d — stopping before portal %s", max_listings, portal_name)
-                break
+            # Each portal gets its own budget of NEW listings, so a big portal
+            # can't starve the next one; re-stored known listings are free.
+            remaining = max_listings
 
             scraper = get_scraper(portal_name)
             known_db = SessionLocal()
